@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/iniwex5/quectel-qmi-go/pkg/qmi"
+	"github.com/ljh740/quectel-qmi-go/pkg/qmi"
 )
 
 func newRecoveryTestManager() *Manager {
