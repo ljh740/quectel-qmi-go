@@ -53,7 +53,7 @@ func shouldRecoverServiceError(service string, err error, serviceUnavailableText
 
 	return strings.Contains(lowerErr, strings.ToLower(needle)) ||
 		strings.Contains(lowerErr, "qmi 服务未就绪: "+lowerSvc) ||
-		strings.Contains(lowerErr, "allocate client id request failed")
+		strings.Contains(lowerErr, strings.ToLower(qmi.AllocateClientIDFailedText))
 }
 
 func isServiceTimeoutError(err error) bool {

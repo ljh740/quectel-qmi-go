@@ -3,6 +3,7 @@ package manager
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -282,6 +283,71 @@ func TestWithUIMRecoveryContextRebindCancelDoesNotScheduleRecovery(t *testing.T)
 	select {
 	case evt := <-m.eventCh:
 		t.Fatalf("caller cancellation during rebind scheduled %v, want nothing", evt)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// 惰性分配因期限到期中止：错误仍带分配失败标识，无论默认阈值还是禁用普通超时恢复，都立即调度恢复；
+// 同样文案但由调用方主动取消时不调度。
+func TestEnsureUIMServiceAllocationDeadlineKeepsImmediateRecoveryPolicy(t *testing.T) {
+	for _, disableTimeoutRecovery := range []bool{false, true} {
+		t.Run(fmt.Sprintf("disable_timeout_recovery=%v", disableTimeoutRecovery), func(t *testing.T) {
+			m := newUIMContextTestManager()
+			m.cfg.RecoveryPolicy.DisableServiceTimeoutRecovery = disableTimeoutRecovery
+			allocErr := fmt.Errorf("allocate UIM client failed: %s (aborted by caller after 1 attempt(s), last error: write failed): %w",
+				qmi.AllocateClientIDFailedText, context.DeadlineExceeded)
+			m.ensureUIMServiceHook = func() (*qmi.UIMService, error) { return nil, allocErr }
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if _, err := withUIMRecoveryValueContext(m, ctx, "UIMPowerOnSIM", func(*qmi.UIMService) (struct{}, error) {
+				t.Fatal("operation must not run")
+				return struct{}{}, nil
+			}); !errors.Is(err, allocErr) {
+				t.Fatalf("withUIMRecoveryValueContext = %v, want the allocation error", err)
+			}
+			if evt := waitInternalRecoveryEvent(t, m.eventCh, time.Second); evt != eventModemReset {
+				t.Fatalf("scheduled %v, want immediate eventModemReset for an allocation failure", evt)
+			}
+		})
+	}
+
+	m := newUIMContextTestManager()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancelledErr := fmt.Errorf("allocate UIM client failed: %s (aborted by caller after 1 attempt(s), last error: write failed): %w",
+		qmi.AllocateClientIDFailedText, context.Canceled)
+	m.ensureUIMServiceHook = func() (*qmi.UIMService, error) {
+		cancel()
+		return nil, cancelledErr
+	}
+	if _, err := withUIMRecoveryValueContext(m, ctx, "UIMPowerOnSIM", func(*qmi.UIMService) (struct{}, error) {
+		return struct{}{}, nil
+	}); !errors.Is(err, cancelledErr) {
+		t.Fatalf("withUIMRecoveryValueContext = %v, want the cancelled allocation error", err)
+	}
+	select {
+	case evt := <-m.eventCh:
+		t.Fatalf("caller cancellation with an allocation-failure text scheduled %v, want nothing", evt)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// ensure 钩子在调用方取消后返回可恢复的 QMI 错误：取消守卫必须拦住上报，不入队恢复。
+func TestEnsureUIMServiceCancelledWithRecoverableErrorDoesNotScheduleRecovery(t *testing.T) {
+	m := newUIMContextTestManager()
+	ctx, cancel := context.WithCancel(context.Background())
+	recoverable := recoverableQMIError(qmi.ServiceControl, qmi.CTLGetClientID)
+	m.ensureUIMServiceHook = func() (*qmi.UIMService, error) {
+		cancel()
+		return nil, recoverable
+	}
+	if _, err := withUIMRecoveryValueContext(m, ctx, "UIMPowerOnSIM", func(*qmi.UIMService) (struct{}, error) {
+		return struct{}{}, nil
+	}); !errors.Is(err, recoverable) {
+		t.Fatalf("withUIMRecoveryValueContext = %v, want the recoverable error", err)
+	}
+	select {
+	case evt := <-m.eventCh:
+		t.Fatalf("cancelled caller with a recoverable ensure error scheduled %v, want nothing", evt)
 	case <-time.After(100 * time.Millisecond):
 	}
 }

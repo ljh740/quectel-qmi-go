@@ -1061,13 +1061,19 @@ func (c *Client) AllocateClientIDWithContext(ctx context.Context, service uint8)
 		}
 	}
 
-	return 0, fmt.Errorf("allocate client ID request failed after retries: %w", lastErr)
+	return 0, fmt.Errorf("%s after retries: %w", AllocateClientIDFailedText, lastErr)
 }
 
-// allocateClientIDAbortedError 以调用方的 ctx 错误为主体（errors.Is 可判定取消/超时），最后一次请求错误只作诊断信息。
-// allocateClientIDAbortedError wraps the caller's context error so cancellation and deadlines stay identifiable.
+// AllocateClientIDFailedText 是分配失败错误的稳定标识，manager 的服务错误分类器据此识别"分配失败"；
+// 无论重试耗尽还是被调用方 ctx 中止，错误文案都以它开头。
+// AllocateClientIDFailedText is the stable marker the manager-side classifier relies on for allocation failures.
+const AllocateClientIDFailedText = "allocate client ID request failed"
+
+// allocateClientIDAbortedError 保留稳定的分配失败标识，并以调用方的 ctx 错误为 %w 主体（errors.Is 可判定取消/超时），
+// 最后一次请求错误只作诊断信息。
+// allocateClientIDAbortedError keeps the stable failure marker and wraps the caller's context error.
 func allocateClientIDAbortedError(attempts int, lastErr, ctxErr error) error {
-	return fmt.Errorf("allocate client ID aborted after %d attempt(s) (last error: %v): %w", attempts, lastErr, ctxErr)
+	return fmt.Errorf("%s (aborted by caller after %d attempt(s), last error: %v): %w", AllocateClientIDFailedText, attempts, lastErr, ctxErr)
 }
 
 // ReleaseClientID releases a client ID for the given service / ReleaseClientID释放给定服务的客户端ID

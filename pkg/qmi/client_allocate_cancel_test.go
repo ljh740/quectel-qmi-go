@@ -3,6 +3,7 @@ package qmi
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -61,5 +62,16 @@ func TestAllocateClientIDWithContextReportsDeadlineDuringRetryWait(t *testing.T)
 	case <-more:
 		t.Fatal("a second allocation request was sent after the deadline")
 	case <-time.After(150 * time.Millisecond):
+	}
+}
+
+// 中止错误保留稳定的分配失败标识（manager 分类器依赖），同时以 ctx 错误为 %w 主体。
+func TestAllocateClientIDAbortedErrorKeepsFailureMarker(t *testing.T) {
+	err := allocateClientIDAbortedError(1, errors.New("write failed"), context.DeadlineExceeded)
+	if !strings.Contains(strings.ToLower(err.Error()), strings.ToLower(AllocateClientIDFailedText)) {
+		t.Fatalf("aborted error %q lost the stable failure marker %q", err, AllocateClientIDFailedText)
+	}
+	if !errors.Is(err, context.DeadlineExceeded) || !strings.Contains(err.Error(), "write failed") {
+		t.Fatalf("aborted error = %v, want DeadlineExceeded identity with the last error as diagnostic", err)
 	}
 }
