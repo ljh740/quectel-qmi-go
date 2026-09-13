@@ -2,6 +2,7 @@ package manager
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -49,9 +50,15 @@ func withUIMRecoveryValueContext[T any](m *Manager, ctx context.Context, op stri
 	if !m.shouldRecoverUIMError(op, err) {
 		return result, err
 	}
-	// 期限已到就不再开始重绑：重绑与重试都超出了调用方允许的时间。
+	// 期限已到就不再开始重绑：重绑与重试都超出了调用方允许的时间。真实到期（DeadlineExceeded）且已达
+	// 恢复阈值时仍调度一次后台 core recovery，避免 UIM 持续无响应却永远得不到恢复；主动取消不触发。
 	if ctxErr := ctx.Err(); ctxErr != nil {
-		m.logServiceRecovery("UIM", op, "initial", err, "UIM operation failed; skipping rebind because the caller deadline expired")
+		if errors.Is(ctxErr, context.DeadlineExceeded) {
+			m.logServiceRecovery("UIM", op, "deadline", err, "UIM operation failed and the caller deadline expired; scheduling core recovery instead of rebinding")
+			m.triggerCoreRecoveryFromService("UIM", op, "deadline", err)
+		} else {
+			m.logServiceRecovery("UIM", op, "initial", err, "UIM operation failed; skipping rebind because the caller cancelled")
+		}
 		return result, err
 	}
 
@@ -88,6 +95,9 @@ func lockContext(ctx context.Context, mu *sync.Mutex) error {
 	if ctx.Done() == nil {
 		mu.Lock()
 		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
 	}
 	if mu.TryLock() {
 		return nil
@@ -155,14 +165,25 @@ func (m *Manager) ensureUIMServiceContext(ctx context.Context) (*qmi.UIMService,
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.client != client {
-		_ = allocated.Close()
+		m.mu.Unlock()
+		m.discardUIMServiceContext(ctx, allocated, "lazy_allocate_client_replaced")
 		return nil, ErrServiceNotReady("UIM")
 	}
 	m.uim = allocated
+	m.mu.Unlock()
 	m.log.Info("UIM service lazily allocated")
 	return allocated, nil
+}
+
+// discardUIMServiceContext 在 m.mu 外、用调用方剩余预算释放分配期间已作废的 UIM 客户端；释放失败只记录。
+func (m *Manager) discardUIMServiceContext(ctx context.Context, svc *qmi.UIMService, reason string) {
+	if svc == nil {
+		return
+	}
+	if err := svc.CloseWithContext(ctx); err != nil {
+		m.log.WithError(err).WithField("reason", reason).Warn("Releasing a superseded UIM client failed")
+	}
 }
 
 func (m *Manager) rebindUIMService(reason string) (*qmi.UIMService, error) {
@@ -204,23 +225,29 @@ func (m *Manager) rebindUIMServiceContext(ctx context.Context, reason string) (*
 	m.mu.Lock()
 	if m.client != client {
 		m.mu.Unlock()
-		_ = allocated.Close()
+		m.discardUIMServiceContext(ctx, allocated, "rebind_client_replaced")
 		return nil, ErrServiceNotReady("UIM")
 	}
 	m.uim = allocated
 	m.mu.Unlock()
 
-	ctx, cancel := m.opContext(m.cfg.Timeouts.IndicationRegister)
-	acceptedMask, registerErr := m.registerUIMIndicationsWithContext(ctx, allocated)
-	cancel()
-	if registerErr != nil {
-		m.log.WithField("reason", reason).WithError(registerErr).Warn("Failed to replay UIM indication registration after rebind")
-	} else {
-		m.log.WithField("reason", reason).WithField("requested_mask", m.uimIndicationRegistrationMask()).WithField("accepted_mask", acceptedMask).Info("Replayed UIM indication registration after rebind")
-	}
+	m.replayUIMIndicationsAfterRebind(ctx, allocated, reason)
 
 	m.log.WithField("reason", reason).Info("UIM service rebound")
 	return allocated, nil
+}
+
+// replayUIMIndicationsAfterRebind 在重绑后重放指示注册：继承调用方剩余预算，并以 IndicationRegister 超时为上限，
+// 不额外延长总期限；失败只记录。
+func (m *Manager) replayUIMIndicationsAfterRebind(ctx context.Context, uim *qmi.UIMService, reason string) {
+	registerCtx, cancel := contextWithMaxTimeout(ctx, m.cfg.Timeouts.IndicationRegister)
+	defer cancel()
+	acceptedMask, registerErr := m.registerUIMIndicationsWithContext(registerCtx, uim)
+	if registerErr != nil {
+		m.log.WithField("reason", reason).WithError(registerErr).Warn("Failed to replay UIM indication registration after rebind")
+		return
+	}
+	m.log.WithField("reason", reason).WithField("requested_mask", m.uimIndicationRegistrationMask()).WithField("accepted_mask", acceptedMask).Info("Replayed UIM indication registration after rebind")
 }
 
 func (m *Manager) shouldRecoverUIMError(op string, err error) bool {

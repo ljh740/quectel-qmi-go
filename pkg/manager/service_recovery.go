@@ -223,10 +223,11 @@ func (m *Manager) triggerCoreRecoveryFromService(service string, op string, phas
 		cooldown = defaultUIMRecoverCooldown
 	}
 
+	// 冷却判定使用独立的短临界区：错误上报不得等待服务重绑锁，否则惰性分配/重绑的期限失效。
 	now := time.Now()
-	m.uimRecoveryMu.Lock()
+	m.uimRecoverSignalMu.Lock()
 	if !m.uimLastRecoverSignal.IsZero() && now.Sub(m.uimLastRecoverSignal) < cooldown {
-		m.uimRecoveryMu.Unlock()
+		m.uimRecoverSignalMu.Unlock()
 		m.log.
 			WithField("service_name", service).
 			WithField("op", op).
@@ -235,7 +236,7 @@ func (m *Manager) triggerCoreRecoveryFromService(service string, op string, phas
 		return false
 	}
 	m.uimLastRecoverSignal = now
-	m.uimRecoveryMu.Unlock()
+	m.uimRecoverSignalMu.Unlock()
 
 	m.logServiceRecovery(service, op, "recover-core", cause, "Scheduling core recovery due to service failure")
 	m.enqueueModemResetEvent(strings.ToLower(service) + "_recovery")

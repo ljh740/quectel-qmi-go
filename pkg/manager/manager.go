@@ -219,6 +219,7 @@ type Manager struct {
 	modemResetQueued        bool // 重置事件已入队、尚未被事件循环取走 / reset event queued but not yet picked up
 	coreRecoveryTickets     coreRecoveryTicketState
 	uimRecoveryMu           sync.Mutex
+	uimRecoverSignalMu      sync.Mutex // 只保护 uimLastRecoverSignal 冷却判定，与服务重绑锁分离 / cooldown-only lock
 	dmsRecoveryMu           sync.Mutex
 	nasRecoveryMu           sync.Mutex
 	wmsRecoveryMu           sync.Mutex

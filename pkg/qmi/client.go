@@ -1052,7 +1052,13 @@ func (c *Client) AllocateClientIDWithContext(ctx context.Context, service uint8)
 		if ctx.Err() != nil {
 			break
 		}
-		time.Sleep(500 * time.Millisecond)
+		retryTimer := time.NewTimer(500 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			retryTimer.Stop()
+			return 0, fmt.Errorf("allocate client ID request failed after retries: %w", lastErr)
+		case <-retryTimer.C:
+		}
 	}
 
 	return 0, fmt.Errorf("allocate client ID request failed after retries: %w", lastErr)
