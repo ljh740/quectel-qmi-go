@@ -419,3 +419,72 @@ func TestDispatchQueuedModemResetKeepsQueuedSlotWhileDeferred(t *testing.T) {
 		t.Fatalf("WaitCoreRecoveryTicket = %v, want nil", err)
 	}
 }
+
+// 恢复执行中启动 Stop：Stop 在等待退出期间，恢复完成并把状态写回 Disconnected，
+// 票号接口仍须把 Manager 视为已停止（请求 (0,false)、等待 ErrCoreRecoveryStopped）。
+func TestCoreRecoveryTicketStaysStoppedWhileRecoveryOutlivesStop(t *testing.T) {
+	m := newTicketTestManager(t)
+	ticket, _ := m.RequestCoreRecoveryTicket("first")
+	drainModemResetEvent(t, m)
+
+	opened := make(chan struct{})
+	release := make(chan struct{})
+	m.openClientAndAllocateServicesHook = func(context.Context) error {
+		close(opened)
+		<-release
+		return nil
+	}
+	recoveryDone := make(chan struct{})
+	go func() {
+		defer close(recoveryDone)
+		m.handleModemResetEvent()
+	}()
+	<-opened
+
+	// Stop 在恢复执行中开始，并因事件循环尚未退出而阻塞在 wg.Wait。
+	m.wg.Add(1)
+	stopDone := make(chan error, 1)
+	go func() { stopDone <- m.Stop() }()
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		m.mu.RLock()
+		stopped := m.coreStopped
+		m.mu.RUnlock()
+		if stopped {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("Stop did not latch the stopped flag while blocked")
+		}
+		time.Sleep(time.Millisecond)
+	}
+
+	// 恢复继续完成并写回 Disconnected；Stop 仍在等待。
+	close(release)
+	<-recoveryDone
+	m.mu.RLock()
+	state := m.state
+	m.mu.RUnlock()
+	if state != StateDisconnected {
+		t.Fatalf("state after the outliving recovery = %v, want Disconnected", state)
+	}
+	select {
+	case err := <-stopDone:
+		t.Fatalf("Stop returned early with %v while the event loop was still running", err)
+	default:
+	}
+	if got, scheduled := m.RequestCoreRecoveryTicket("during_stop"); got != 0 || scheduled {
+		t.Fatalf("RequestCoreRecoveryTicket during Stop = (%d, %v), want (0, false)", got, scheduled)
+	}
+	if err := m.WaitCoreRecoveryTicket(context.Background(), ticket); !errors.Is(err, ErrCoreRecoveryStopped) {
+		t.Fatalf("WaitCoreRecoveryTicket during Stop = %v, want ErrCoreRecoveryStopped", err)
+	}
+
+	m.wg.Done()
+	if err := awaitWait(t, stopDone); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	if err := m.WaitCoreRecoveryTicket(context.Background(), ticket); !errors.Is(err, ErrCoreRecoveryStopped) {
+		t.Fatalf("WaitCoreRecoveryTicket after Stop = %v, want ErrCoreRecoveryStopped", err)
+	}
+}

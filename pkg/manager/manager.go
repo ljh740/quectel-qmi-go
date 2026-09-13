@@ -176,8 +176,9 @@ type Manager struct {
 	coreReadyStage    string
 	coreReadyLastErr  string
 	coreReadySince    time.Time
-	// coreStopped 表示 Stop 已完成（或 StartCoreContext 失败）且尚未重新启动：此后不会再有恢复尝试。
-	// coreStopped marks that Stop finished (or the core failed to start) and nothing will recover the core.
+	// coreStopped 表示 Stop 已开始（或 StartCoreContext 失败）且尚未重新启动：业务状态转换不会清除它，
+	// 此后不会再有可信的恢复尝试。
+	// coreStopped latches from the start of Stop (or a failed start) until the next successful start; state transitions never clear it.
 	coreStopped       bool
 	desiredConnection bool
 
@@ -605,6 +606,10 @@ func (m *Manager) Stop() error {
 	if !wasStopping {
 		m.state = StateStopping
 	}
+	// 生命周期停止标志在 Stop 入口就固化：在途恢复随后把状态写回 Disconnected 也不能让票号接口
+	// 误认为 Manager 仍在运行；只有下一次合法的 StartCoreContext 才会清除它。
+	// Latch the stopped lifecycle here so an in-flight recovery writing StateDisconnected cannot revive the ticket API.
+	m.coreStopped = true
 	cancel := m.cancel
 	m.mu.Unlock()
 
@@ -634,8 +639,8 @@ func (m *Manager) Stop() error {
 	return nil
 }
 
-// markCoreStopped 在同一临界区内记录"已停止"并回到 Disconnected：等待恢复票号的一方据此立即失败，
-// 而不是把 Disconnected 误当成可恢复的空闲状态。
+// markCoreStopped 在同一临界区内记录"已停止"并回到 Disconnected（Stop 入口已置位，此处覆盖启动失败路径）：
+// 等待恢复票号的一方据此立即失败，而不是把 Disconnected 误当成可恢复的空闲状态。
 // markCoreStopped records the stopped lifecycle together with the Disconnected state so ticket waiters fail fast.
 func (m *Manager) markCoreStopped() {
 	m.mu.Lock()
@@ -647,7 +652,7 @@ func (m *Manager) markCoreStopped() {
 	}
 }
 
-// coreStoppedLocked 报告 core 生命周期已结束：Stop 进行中或已完成，或启动失败。调用方持有 mu。
+// coreStoppedLocked 报告 core 生命周期已结束：Stop 已开始（含进行中与已完成），或启动失败。调用方持有 mu。
 // coreStoppedLocked reports that the core is stopping or stopped; the caller holds mu.
 func (m *Manager) coreStoppedLocked() bool {
 	return m.state == StateStopping || m.coreStopped
