@@ -307,3 +307,115 @@ func TestEnqueueModemResetEventCoalescesWhileQueued(t *testing.T) {
 		t.Fatal("queued flag should clear once the event is picked up")
 	}
 }
+
+// 恢复结束时待处理恢复原子转为已排队：第一轮成功且 core 已就绪后、第二轮开始前，票号等待方仍须阻塞。
+func TestPendingRecoveryHandoffKeepsTicketWaiterBlocked(t *testing.T) {
+	m := newTicketTestManager(t)
+	ticket, _ := m.RequestCoreRecoveryTicket("first")
+	drainModemResetEvent(t, m)
+	// 第一轮在静默窗口之后（身份门控阶段）收到一次外部复位指示：没有票号，只能合并为待处理。
+	injected := false
+	m.getICCIDStrictHook = func(ctx context.Context) (string, error) {
+		if !injected {
+			injected = true
+			m.enqueueModemResetEvent("qmi_indication")
+		}
+		return "iccid", nil
+	}
+	done := startWait(m, ticket)
+	m.handleModemResetEvent()
+	if !injected {
+		t.Fatal("test hook did not run; the external reset was never injected")
+	}
+
+	st := m.coreRecoveryWaitSnapshot()
+	if !st.ready || st.completed < ticket {
+		t.Fatalf("first attempt should have completed the ticket with the core ready: %+v", st)
+	}
+	if !st.recovering || !m.IsCoreRecovering() {
+		t.Fatal("pending recovery must already be queued when the first attempt ends")
+	}
+	assertWaitBlocked(t, done, "wait returned between the first attempt's success and the queued pending recovery")
+
+	drainModemResetEvent(t, m)
+	m.handleModemResetEvent()
+	if err := awaitWait(t, done); err != nil {
+		t.Fatalf("WaitCoreRecoveryTicket = %v, want nil after the pending recovery completed", err)
+	}
+	if m.IsCoreRecovering() {
+		t.Fatal("no recovery should remain after the pending recovery ran")
+	}
+}
+
+// 真实 Stop() 之后 Manager 回到 Disconnected 但已停止：等待立即返回 ErrCoreRecoveryStopped，请求返回 (0, false)。
+func TestCoreRecoveryTicketFailsFastAfterStop(t *testing.T) {
+	m := newTicketTestManager(t)
+	ticket, _ := m.RequestCoreRecoveryTicket("first")
+	drainModemResetEvent(t, m)
+	if err := m.Stop(); err != nil {
+		t.Fatalf("Stop() = %v", err)
+	}
+	m.mu.RLock()
+	state := m.state
+	m.mu.RUnlock()
+	if state != StateDisconnected {
+		t.Fatalf("state after Stop = %v, want Disconnected", state)
+	}
+
+	if err := m.WaitCoreRecoveryTicket(context.Background(), ticket); !errors.Is(err, ErrCoreRecoveryStopped) {
+		t.Fatalf("WaitCoreRecoveryTicket after Stop = %v, want ErrCoreRecoveryStopped", err)
+	}
+	if got, scheduled := m.RequestCoreRecoveryTicket("after_stop"); got != 0 || scheduled {
+		t.Fatalf("RequestCoreRecoveryTicket after Stop = (%d, %v), want (0, false)", got, scheduled)
+	}
+	select {
+	case evt := <-m.eventCh:
+		if evt == eventModemReset {
+			t.Fatal("stopped manager queued a modem reset event")
+		}
+	default:
+	}
+}
+
+// 事件队列满时排队位在延迟重试期间保持：等待方持续看到"已排队"，重试成功后事件只投递一次。
+func TestDispatchQueuedModemResetKeepsQueuedSlotWhileDeferred(t *testing.T) {
+	m := newTicketTestManager(t)
+	var deferred []func()
+	m.afterFunc = func(_ time.Duration, fn func()) *time.Timer {
+		deferred = append(deferred, fn)
+		return time.NewTimer(time.Hour)
+	}
+	// 塞满内部事件队列。
+	for i := 0; i < cap(m.eventCh); i++ {
+		m.eventCh <- eventCheckTargeted
+	}
+
+	ticket, scheduled := m.RequestCoreRecoveryTicket("post_switch")
+	if !scheduled || ticket != 1 {
+		t.Fatalf("RequestCoreRecoveryTicket = (%d, %v), want (1, true)", ticket, scheduled)
+	}
+	if len(deferred) != 1 {
+		t.Fatalf("deferred dispatches = %d, want 1", len(deferred))
+	}
+	if !m.IsCoreRecovering() {
+		t.Fatal("queued slot must be kept while the dispatch is deferred")
+	}
+	done := startWait(m, ticket)
+	assertWaitBlocked(t, done, "wait returned while the reset event was still waiting for queue space")
+
+	// 腾出队列后重试投递成功。
+	for i := 0; i < cap(m.eventCh); i++ {
+		<-m.eventCh
+	}
+	deferred[0]()
+	drainModemResetEvent(t, m)
+	select {
+	case evt := <-m.eventCh:
+		t.Fatalf("unexpected extra event %v after the deferred dispatch", evt)
+	default:
+	}
+	m.handleModemResetEvent()
+	if err := awaitWait(t, done); err != nil {
+		t.Fatalf("WaitCoreRecoveryTicket = %v, want nil", err)
+	}
+}

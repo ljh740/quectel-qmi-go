@@ -77,7 +77,7 @@ func (s *coreRecoveryTicketState) snapshot() (issued, serving, completed uint64,
 // RequestCoreRecoveryTicket 请求一次 core recovery 并返回可等待的票号。
 // scheduled 为 true 时本次请求已入队（或合并进排队/在途恢复之后的待处理恢复），票号由此后启动的恢复尝试服务；
 // core 未就绪（已有恢复在途或等待重试）时不再入队，票号沿用当前尝试服务的票号，由它及其重试代为完成，scheduled 为 false；
-// Manager 正在停止时返回 (0, false)。票号 0 表示没有对应的恢复尝试，WaitCoreRecoveryTicket(0) 只等待空闲且就绪。
+// Manager 正在停止或已停止时返回 (0, false)。票号 0 表示没有对应的恢复尝试，WaitCoreRecoveryTicket(0) 只等待空闲且就绪。
 //
 // RequestCoreRecoveryTicket requests a core recovery and returns a ticket that WaitCoreRecoveryTicket can
 // wait on. Explicit requests bypass the debounce window, so a scheduled ticket is always served by an
@@ -93,9 +93,9 @@ func (m *Manager) RequestCoreRecoveryTicket(reason string) (ticket uint64, sched
 
 	m.mu.RLock()
 	coreReady := m.coreReady
-	stopping := m.state == StateStopping
+	stopped := m.coreStoppedLocked()
 	m.mu.RUnlock()
-	if stopping {
+	if stopped {
 		return 0, false
 	}
 	cause := fmt.Errorf("%s", reason)
@@ -131,8 +131,39 @@ func (m *Manager) CoreRecoveryTicketStatus() (issued, serving, completed uint64,
 	return m.coreRecoveryTickets.snapshot()
 }
 
+// coreRecoveryWaitState 是等待判定用的一致快照。
+// coreRecoveryWaitState is the consistent snapshot WaitCoreRecoveryTicket decides on.
+type coreRecoveryWaitState struct {
+	serving    uint64
+	completed  uint64
+	exhausted  bool
+	ready      bool
+	stopped    bool
+	recovering bool
+	stage      string
+	lastErr    string
+}
+
+// coreRecoveryWaitSnapshot 在 modemResetMu 内一次读取恢复状态、就绪标志与票号：恢复尝试的开始与结束都在
+// modemResetMu 内切换 recovering，因此 recovering 为 false 时读到的 ready/completed 不会来自一次进行到一半的尝试。
+// 锁序：modemResetMu → mu → coreRecoveryTickets.mu；其他路径不会在持有 mu 或票号锁时再取 modemResetMu。
+// coreRecoveryWaitSnapshot reads recovery flags, readiness and tickets under modemResetMu so they describe one instant.
+func (m *Manager) coreRecoveryWaitSnapshot() coreRecoveryWaitState {
+	m.modemResetMu.Lock()
+	defer m.modemResetMu.Unlock()
+	st := coreRecoveryWaitState{recovering: m.modemResetRecovering || m.modemResetPending || m.modemResetQueued}
+	m.mu.RLock()
+	st.ready = m.coreReady
+	st.stopped = m.coreStoppedLocked()
+	st.stage = m.coreReadyStage
+	st.lastErr = m.coreReadyLastErr
+	m.mu.RUnlock()
+	_, st.serving, st.completed, st.exhausted = m.coreRecoveryTickets.snapshot()
+	return st
+}
+
 // WaitCoreRecoveryTicket 等待票号对应的恢复完成：已完成的票号不小于 ticket、没有恢复在途/待处理/排队，且 core 就绪。
-// 恢复耗尽返回 ErrCoreRecoveryExhausted，Manager 停止返回 ErrCoreRecoveryStopped，ctx 到期返回带状态的错误。
+// 恢复耗尽返回 ErrCoreRecoveryExhausted，Manager 正在停止或已停止返回 ErrCoreRecoveryStopped，ctx 到期返回带状态的错误。
 //
 // WaitCoreRecoveryTicket blocks until the attempt serving the ticket succeeded, no further recovery is
 // running, pending or queued, and the core is ready.
@@ -147,35 +178,29 @@ func (m *Manager) WaitCoreRecoveryTicket(ctx context.Context, ticket uint64) err
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		_, serving, completed, exhausted := m.coreRecoveryTickets.snapshot()
-		m.mu.RLock()
-		ready := m.coreReady
-		stopping := m.state == StateStopping
-		stage := m.coreReadyStage
-		lastErr := m.coreReadyLastErr
-		m.mu.RUnlock()
-		recovering := m.IsCoreRecovering()
-		if stopping {
+		st := m.coreRecoveryWaitSnapshot()
+		if st.stopped {
 			return fmt.Errorf("等待 QMI core recovery 完成失败 (ticket=%d): %w", ticket, ErrCoreRecoveryStopped)
 		}
-		if !recovering {
-			if completed >= ticket && ready {
+		if !st.recovering {
+			if st.completed >= ticket && st.ready {
 				return nil
 			}
-			if exhausted {
+			if st.exhausted {
 				return fmt.Errorf("等待 QMI core recovery 完成失败 (ticket=%d completed=%d last_err=%s): %w",
-					ticket, completed, strings.TrimSpace(lastErr), ErrCoreRecoveryExhausted)
+					ticket, st.completed, strings.TrimSpace(st.lastErr), ErrCoreRecoveryExhausted)
 			}
 		}
 		select {
 		case <-ctx.Done():
+			stage := st.stage
 			if stage == "" {
 				stage = "unknown"
 			}
 			return fmt.Errorf(
 				"等待 QMI core recovery 完成超时 (ticket=%d serving=%d completed=%d recovering=%v ready=%v stage=%s waited=%s last_err=%s): %w",
-				ticket, serving, completed, recovering, ready, stage,
-				time.Since(start).Round(time.Millisecond), strings.TrimSpace(lastErr), ctx.Err(),
+				ticket, st.serving, st.completed, st.recovering, st.ready, stage,
+				time.Since(start).Round(time.Millisecond), strings.TrimSpace(st.lastErr), ctx.Err(),
 			)
 		case <-ticker.C:
 		}

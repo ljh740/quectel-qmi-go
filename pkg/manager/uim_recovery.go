@@ -179,83 +179,68 @@ func (m *Manager) enqueueModemResetEventOpts(source string, guaranteed bool) {
 		return
 	}
 	m.resetEvents.Add(1)
+	if !m.claimModemResetQueueSlot(source, guaranteed) {
+		return
+	}
+	m.dispatchQueuedModemReset(source)
+}
 
+// claimModemResetQueueSlot 在锁内决定事件是被合并还是占用唯一的排队位；返回 true 表示 modemResetQueued 已置位，
+// 调用方必须投递该事件。恢复在途时转为待处理；已有事件排队或落入去抖窗口（guaranteed 除外）时合并。
+// claimModemResetQueueSlot decides under the lock whether the event coalesces or takes the single queued slot.
+func (m *Manager) claimModemResetQueueSlot(source string, guaranteed bool) bool {
 	now := time.Now()
 	m.modemResetMu.Lock()
-	if m.modemResetRecovering {
+	coalesced := ""
+	switch {
+	case m.modemResetRecovering:
 		m.modemResetPending = true
-		m.resetCoalesced.Add(1)
-		m.modemResetMu.Unlock()
-		m.log.WithField("source", source).Debug("Coalesced modem-reset event while recovery is running")
-		return
+		coalesced = "Coalesced modem-reset event while recovery is running"
+	case m.modemResetQueued:
+		coalesced = "Coalesced modem-reset event: another reset event is already queued"
+	case !guaranteed && !m.modemResetEnqueuedAt.IsZero() && now.Sub(m.modemResetEnqueuedAt) < m.modemResetDedupWindow:
+		coalesced = "Deduplicated modem-reset event inside debounce window"
+	default:
+		m.modemResetEnqueuedAt = now
+		m.modemResetQueued = true
 	}
-	if m.modemResetQueued {
+	if coalesced != "" {
 		m.resetCoalesced.Add(1)
-		m.modemResetMu.Unlock()
-		m.log.WithField("source", source).Debug("Coalesced modem-reset event: another reset event is already queued")
-		return
 	}
-	if !guaranteed && !m.modemResetEnqueuedAt.IsZero() && now.Sub(m.modemResetEnqueuedAt) < m.modemResetDedupWindow {
-		m.resetCoalesced.Add(1)
-		m.modemResetMu.Unlock()
-		m.log.WithField("source", source).Debug("Deduplicated modem-reset event inside debounce window")
-		return
-	}
-	m.modemResetEnqueuedAt = now
-	m.modemResetQueued = true
 	m.modemResetMu.Unlock()
+	if coalesced != "" {
+		m.log.WithField("source", source).Debug(coalesced)
+		return false
+	}
+	return true
+}
 
+// dispatchQueuedModemReset 投递已占位的事件。事件队列满时延后重试，重试期间排队位保持，IsCoreRecovering 持续为 true；
+// 重试时若恢复已在途，占位在同一临界区内转为待处理，由恢复结束后原子转回排队。
+// dispatchQueuedModemReset delivers a claimed event, retrying later while keeping the queued slot when the queue is full.
+func (m *Manager) dispatchQueuedModemReset(source string) {
+	m.dispatchQueuedModemResetWithRetry(source, 200*time.Millisecond)
+}
+
+func (m *Manager) dispatchQueuedModemResetWithRetry(source string, retryDelay time.Duration) {
 	select {
 	case m.eventCh <- eventModemReset:
 		return
 	default:
-		m.modemResetMu.Lock()
-		if m.modemResetDeferred {
-			m.modemResetPending = true
-			m.resetCoalesced.Add(1)
-			m.modemResetMu.Unlock()
-			m.log.WithField("source", source).Debug("Deferred modem-reset enqueue already scheduled")
-			return
-		}
-		m.modemResetDeferred = true
-		m.modemResetMu.Unlock()
-		m.log.WithField("source", source).Warn("Internal event queue is full; scheduling deferred modem-reset event")
 	}
-
-	m.scheduleAfter(200*time.Millisecond, func() {
+	m.log.WithField("source", source).Warn("Internal event queue is full; scheduling deferred modem-reset event")
+	m.scheduleAfter(retryDelay, func() {
 		m.modemResetMu.Lock()
-		m.modemResetDeferred = false
 		if m.modemResetRecovering {
+			m.modemResetQueued = false
 			m.modemResetPending = true
 			m.resetCoalesced.Add(1)
-			m.modemResetQueued = false
 			m.modemResetMu.Unlock()
+			m.log.WithField("source", source).Debug("Deferred modem-reset event folded into the running recovery")
 			return
 		}
-		m.modemResetEnqueuedAt = time.Now()
 		m.modemResetMu.Unlock()
-
-		select {
-		case m.eventCh <- eventModemReset:
-		default:
-			m.modemResetMu.Lock()
-			if !m.modemResetDeferred {
-				m.modemResetDeferred = true
-			}
-			m.modemResetPending = true
-			m.resetCoalesced.Add(1)
-			m.modemResetMu.Unlock()
-			m.log.WithField("source", source).Warn("Deferred modem-reset event still blocked; retrying enqueue")
-			m.scheduleAfter(500*time.Millisecond, func() {
-				m.modemResetMu.Lock()
-				m.modemResetDeferred = false
-				// clear debounce timestamp so deferred retry is not swallowed by dedup window
-				m.modemResetEnqueuedAt = time.Time{}
-				m.modemResetQueued = false
-				m.modemResetMu.Unlock()
-				m.enqueueModemResetEventOpts(source+"_deferred_retry", guaranteed)
-			})
-		}
+		m.dispatchQueuedModemResetWithRetry(source+"_deferred_retry", 500*time.Millisecond)
 	})
 }
 

@@ -176,6 +176,9 @@ type Manager struct {
 	coreReadyStage    string
 	coreReadyLastErr  string
 	coreReadySince    time.Time
+	// coreStopped 表示 Stop 已完成（或 StartCoreContext 失败）且尚未重新启动：此后不会再有恢复尝试。
+	// coreStopped marks that Stop finished (or the core failed to start) and nothing will recover the core.
+	coreStopped       bool
 	desiredConnection bool
 
 	// Event handling
@@ -212,7 +215,6 @@ type Manager struct {
 	modemResetEnqueuedAt    time.Time
 	modemResetDedupWindow   time.Duration
 	modemResetQuietWindow   time.Duration
-	modemResetDeferred      bool
 	modemResetQueued        bool // 重置事件已入队、尚未被事件循环取走 / reset event queued but not yet picked up
 	coreRecoveryTickets     coreRecoveryTicketState
 	uimRecoveryMu           sync.Mutex
@@ -551,6 +553,7 @@ func (m *Manager) StartCoreContext(ctx context.Context) error {
 	}
 	m.state = StateConnecting
 	m.desiredConnection = false
+	m.coreStopped = false
 	m.mu.Unlock()
 
 	openErr := error(nil)
@@ -561,7 +564,7 @@ func (m *Manager) StartCoreContext(ctx context.Context) error {
 	}
 	if openErr != nil {
 		m.cleanup()
-		m.setState(StateDisconnected)
+		m.markCoreStopped()
 		return openErr
 	}
 	m.mu.Lock()
@@ -626,9 +629,28 @@ func (m *Manager) Stop() error {
 	if m.events != nil {
 		m.events.Close()
 	}
-	m.setState(StateDisconnected)
+	m.markCoreStopped()
 	m.log.Info("Connection manager stopped")
 	return nil
+}
+
+// markCoreStopped 在同一临界区内记录"已停止"并回到 Disconnected：等待恢复票号的一方据此立即失败，
+// 而不是把 Disconnected 误当成可恢复的空闲状态。
+// markCoreStopped records the stopped lifecycle together with the Disconnected state so ticket waiters fail fast.
+func (m *Manager) markCoreStopped() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.coreStopped = true
+	if m.state != StateDisconnected {
+		m.log.Infof("State: %s -> %s", m.state, StateDisconnected)
+		m.state = StateDisconnected
+	}
+}
+
+// coreStoppedLocked 报告 core 生命周期已结束：Stop 进行中或已完成，或启动失败。调用方持有 mu。
+// coreStoppedLocked reports that the core is stopping or stopped; the caller holds mu.
+func (m *Manager) coreStoppedLocked() bool {
+	return m.state == StateStopping || m.coreStopped
 }
 
 // Connect establishes a data call on top of an already-started QMI core.
@@ -2982,6 +3004,13 @@ func (m *Manager) handleModemResetEvent() {
 	m.modemResetRecovering = false
 	pending := m.modemResetPending
 	m.modemResetPending = false
+	if pending {
+		// 待处理恢复在同一临界区内直接转为已排队：本轮成功、core 已就绪，但下一轮尚未开始，
+		// 等待票号的一方不能在这个空档看到"没有恢复在途"而提前放行。
+		// Hand the pending recovery over to the queued slot atomically so ticket waiters never observe an idle gap.
+		m.modemResetEnqueuedAt = time.Now()
+		m.modemResetQueued = true
+	}
 	m.modemResetMu.Unlock()
 
 	if pending {
@@ -2990,8 +3019,9 @@ func (m *Manager) handleModemResetEvent() {
 		} else {
 			m.log.Warn("Processing coalesced modem reset event after failed recovery attempt")
 		}
-		// 待处理恢复代表被合并的请求（可能含显式票号），不能再被去抖窗口吞掉。
-		m.enqueueModemResetEventOpts("pending_after_recovery", true)
+		// 待处理恢复代表被合并的请求（可能含显式票号）：排队位已占好，直接投递，不再经过去抖窗口。
+		m.resetEvents.Add(1)
+		m.dispatchQueuedModemReset("pending_after_recovery")
 	}
 }
 
