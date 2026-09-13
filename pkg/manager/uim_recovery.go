@@ -1,23 +1,39 @@
 package manager
 
 import (
+	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/ljh740/quectel-qmi-go/pkg/qmi"
 )
 
 func (m *Manager) withUIMRecovery(op string, fn func(uim *qmi.UIMService) error) error {
-	_, err := withUIMRecoveryValue(m, op, func(uim *qmi.UIMService) (struct{}, error) {
+	return m.withUIMRecoveryContext(context.Background(), op, fn)
+}
+
+// withUIMRecoveryContext 与 withUIMRecovery 相同，但服务惰性分配、重绑及其锁等待都受 ctx 期限约束：
+// 调用方给出的期限覆盖整个操作，而不只覆盖最终的 QMI 请求。
+// withUIMRecoveryContext bounds lazy allocation, rebind and their lock waits by ctx as well as the request itself.
+func (m *Manager) withUIMRecoveryContext(ctx context.Context, op string, fn func(uim *qmi.UIMService) error) error {
+	_, err := withUIMRecoveryValueContext(m, ctx, op, func(uim *qmi.UIMService) (struct{}, error) {
 		return struct{}{}, fn(uim)
 	})
 	return err
 }
 
 func withUIMRecoveryValue[T any](m *Manager, op string, fn func(uim *qmi.UIMService) (T, error)) (T, error) {
-	var zero T
+	return withUIMRecoveryValueContext(m, context.Background(), op, fn)
+}
 
-	uim, err := m.ensureUIMService()
+func withUIMRecoveryValueContext[T any](m *Manager, ctx context.Context, op string, fn func(uim *qmi.UIMService) (T, error)) (T, error) {
+	var zero T
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	uim, err := m.ensureUIMServiceContext(ctx)
 	if err != nil {
 		if m.shouldRecoverUIMError(op, err) {
 			m.triggerCoreRecoveryFromService("UIM", op, "initial", err)
@@ -33,11 +49,19 @@ func withUIMRecoveryValue[T any](m *Manager, op string, fn func(uim *qmi.UIMServ
 	if !m.shouldRecoverUIMError(op, err) {
 		return result, err
 	}
+	// 期限已到就不再开始重绑：重绑与重试都超出了调用方允许的时间。
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		m.logServiceRecovery("UIM", op, "initial", err, "UIM operation failed; skipping rebind because the caller deadline expired")
+		return result, err
+	}
 
 	m.logServiceRecovery("UIM", op, "initial", err, "UIM operation failed; rebinding UIM service")
 
-	m.uimRecoveryMu.Lock()
-	uim, rebindErr := m.rebindUIMService("recover:" + op)
+	if lockErr := lockContext(ctx, &m.uimRecoveryMu); lockErr != nil {
+		m.logServiceRecovery("UIM", op, "rebind", lockErr, "UIM rebind skipped: deadline expired while waiting for the recovery lock")
+		return zero, fmt.Errorf("%s: UIM rebind skipped: %w (initial=%v)", op, lockErr, err)
+	}
+	uim, rebindErr := m.rebindUIMServiceContext(ctx, "recover:"+op)
 	m.uimRecoveryMu.Unlock()
 	if rebindErr != nil {
 		m.logServiceRecovery("UIM", op, "rebind", rebindErr, "UIM service rebind failed")
@@ -58,12 +82,44 @@ func withUIMRecoveryValue[T any](m *Manager, op string, fn func(uim *qmi.UIMServ
 	return retryResult, retryErr
 }
 
+// lockContext 在 ctx 期限内获取 mu；没有期限/取消信号的 ctx 直接阻塞等待。
+// lockContext acquires mu, giving up when ctx expires; contexts without Done block like Lock.
+func lockContext(ctx context.Context, mu *sync.Mutex) error {
+	if ctx.Done() == nil {
+		mu.Lock()
+		return nil
+	}
+	if mu.TryLock() {
+		return nil
+	}
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C:
+			if mu.TryLock() {
+				return nil
+			}
+		}
+	}
+}
+
 func (m *Manager) ensureUIMService() (*qmi.UIMService, error) {
+	return m.ensureUIMServiceContext(context.Background())
+}
+
+// ensureUIMServiceContext 返回已分配的 UIM 服务，必要时在 ctx 期限内惰性分配（含锁等待与 CTL 分配请求）。
+func (m *Manager) ensureUIMServiceContext(ctx context.Context) (*qmi.UIMService, error) {
 	if m == nil {
 		return nil, ErrServiceNotReady("UIM")
 	}
 	if m.ensureUIMServiceHook != nil {
 		return m.ensureUIMServiceHook()
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	m.mu.RLock()
@@ -77,7 +133,9 @@ func (m *Manager) ensureUIMService() (*qmi.UIMService, error) {
 		return nil, ErrServiceNotReady("UIM")
 	}
 
-	m.uimRecoveryMu.Lock()
+	if err := lockContext(ctx, &m.uimRecoveryMu); err != nil {
+		return nil, fmt.Errorf("allocate UIM client: %w", err)
+	}
 	defer m.uimRecoveryMu.Unlock()
 
 	m.mu.RLock()
@@ -91,7 +149,7 @@ func (m *Manager) ensureUIMService() (*qmi.UIMService, error) {
 		return nil, ErrServiceNotReady("UIM")
 	}
 
-	allocated, err := qmi.NewUIMService(client)
+	allocated, err := qmi.NewUIMServiceWithContext(ctx, client)
 	if err != nil {
 		return nil, fmt.Errorf("allocate UIM client failed: %w", err)
 	}
@@ -108,6 +166,11 @@ func (m *Manager) ensureUIMService() (*qmi.UIMService, error) {
 }
 
 func (m *Manager) rebindUIMService(reason string) (*qmi.UIMService, error) {
+	return m.rebindUIMServiceContext(context.Background(), reason)
+}
+
+// rebindUIMServiceContext 在 ctx 期限内释放旧 UIM 客户端并重新分配；调用方须持有 uimRecoveryMu。
+func (m *Manager) rebindUIMServiceContext(ctx context.Context, reason string) (*qmi.UIMService, error) {
 	if m == nil {
 		return nil, ErrServiceNotReady("UIM")
 	}
@@ -122,15 +185,18 @@ func (m *Manager) rebindUIMService(reason string) (*qmi.UIMService, error) {
 	m.mu.Unlock()
 
 	if prev != nil {
-		if err := prev.Close(); err != nil {
+		if err := prev.CloseWithContext(ctx); err != nil {
 			m.log.WithError(err).WithField("reason", reason).Warn("Closing previous UIM client failed during rebind")
 		}
 	}
 	if client == nil {
 		return nil, ErrServiceNotReady("UIM")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, fmt.Errorf("allocate UIM client: %w", err)
+	}
 
-	allocated, err := qmi.NewUIMService(client)
+	allocated, err := qmi.NewUIMServiceWithContext(ctx, client)
 	if err != nil {
 		return nil, fmt.Errorf("allocate UIM client failed: %w", err)
 	}

@@ -56,7 +56,7 @@ func (m *Manager) querySMSCFromDevice(ctx context.Context) (string, error) {
 		return "", err
 	}
 	if m.sendAPDUHook == nil {
-		if _, err := withUIMRecoveryValue(m, "GetSMSC.EnsureUIM", func(uim *qmi.UIMService) (struct{}, error) {
+		if _, err := withUIMRecoveryValueContext(m, ctx, "GetSMSC.EnsureUIM", func(uim *qmi.UIMService) (struct{}, error) {
 			return struct{}{}, nil
 		}); err != nil {
 			return "", err

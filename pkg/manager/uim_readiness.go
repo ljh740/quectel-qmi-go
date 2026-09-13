@@ -181,7 +181,7 @@ func (m *Manager) GetUIMReadiness(ctx context.Context) (UIMReadiness, error) {
 	}
 	var details *qmi.CardStatusDetails
 	status := qmi.SIMNotReady
-	cardStatus, cardErr := withUIMRecoveryValue(m, "GetUIMReadiness.GetCardStatusDetails", func(uim *qmi.UIMService) (cardStatusResult, error) {
+	cardStatus, cardErr := withUIMRecoveryValueContext(m, ctx, "GetUIMReadiness.GetCardStatusDetails", func(uim *qmi.UIMService) (cardStatusResult, error) {
 		details, status, err := uim.GetCardStatusDetails(ctx)
 		return cardStatusResult{details: details, status: status}, err
 	})
@@ -193,7 +193,7 @@ func (m *Manager) GetUIMReadiness(ctx context.Context) (UIMReadiness, error) {
 	var slotInfo *qmi.UIMSlotStatus
 	var slotErr error
 	if cardErr == nil {
-		slotInfo, slotErr = withUIMRecoveryValue(m, "GetUIMReadiness.GetSlotStatus", func(uim *qmi.UIMService) (*qmi.UIMSlotStatus, error) {
+		slotInfo, slotErr = withUIMRecoveryValueContext(m, ctx, "GetUIMReadiness.GetSlotStatus", func(uim *qmi.UIMService) (*qmi.UIMSlotStatus, error) {
 			return uim.GetSlotStatus(ctx)
 		})
 	}

@@ -2056,7 +2056,7 @@ func (m *Manager) OpenLogicalChannelContext(ctx context.Context, slot uint8, aid
 	if m.openLogicalChannelHook != nil {
 		return m.openLogicalChannelHook(ctx, slot, aid)
 	}
-	return withUIMRecoveryValue(m, "OpenLogicalChannel", func(uim *qmi.UIMService) (byte, error) {
+	return withUIMRecoveryValueContext(m, ctx, "OpenLogicalChannel", func(uim *qmi.UIMService) (byte, error) {
 		return uim.OpenLogicalChannel(ctx, slot, aid)
 	})
 }
@@ -2073,7 +2073,7 @@ func (m *Manager) CloseLogicalChannelContext(ctx context.Context, slot uint8, ch
 	if m.closeLogicalChannelHook != nil {
 		return m.closeLogicalChannelHook(ctx, slot, channel)
 	}
-	return m.withUIMRecovery("CloseLogicalChannel", func(uim *qmi.UIMService) error {
+	return m.withUIMRecoveryContext(ctx, "CloseLogicalChannel", func(uim *qmi.UIMService) error {
 		return uim.CloseLogicalChannel(ctx, slot, channel)
 	})
 }
@@ -2090,32 +2090,32 @@ func (m *Manager) SendAPDUContext(ctx context.Context, slot uint8, channel uint8
 	if m.sendAPDUHook != nil {
 		return m.sendAPDUHook(ctx, slot, channel, command)
 	}
-	return withUIMRecoveryValue(m, "SendAPDU", func(uim *qmi.UIMService) ([]byte, error) {
+	return withUIMRecoveryValueContext(m, ctx, "SendAPDU", func(uim *qmi.UIMService) ([]byte, error) {
 		return uim.SendAPDU(ctx, slot, channel, command)
 	})
 }
 
 // GetNativeMCCMNC 获取原生归属地 MCC 和 MNC
 func (m *Manager) GetNativeSPN(ctx context.Context) (string, error) {
-	return withUIMRecoveryValue(m, "GetNativeSPN", func(uim *qmi.UIMService) (string, error) {
+	return withUIMRecoveryValueContext(m, ctx, "GetNativeSPN", func(uim *qmi.UIMService) (string, error) {
 		return uim.GetNativeSPN(ctx)
 	})
 }
 
 func (m *Manager) GetSIMMetadata(ctx context.Context) (*qmi.SIMMetadata, error) {
-	return withUIMRecoveryValue(m, "GetSIMMetadata", func(uim *qmi.UIMService) (*qmi.SIMMetadata, error) {
+	return withUIMRecoveryValueContext(m, ctx, "GetSIMMetadata", func(uim *qmi.UIMService) (*qmi.SIMMetadata, error) {
 		return uim.GetSIMMetadata(ctx)
 	})
 }
 
 func (m *Manager) GetUSIMAID(ctx context.Context) ([]byte, error) {
-	return withUIMRecoveryValue(m, "GetUSIMAID", func(uim *qmi.UIMService) ([]byte, error) {
+	return withUIMRecoveryValueContext(m, ctx, "GetUSIMAID", func(uim *qmi.UIMService) ([]byte, error) {
 		return uim.GetUSIMAID(ctx)
 	})
 }
 
 func (m *Manager) GetISIMAID(ctx context.Context) ([]byte, error) {
-	return withUIMRecoveryValue(m, "GetISIMAID", func(uim *qmi.UIMService) ([]byte, error) {
+	return withUIMRecoveryValueContext(m, ctx, "GetISIMAID", func(uim *qmi.UIMService) ([]byte, error) {
 		return uim.GetISIMAID(ctx)
 	})
 }
@@ -2125,7 +2125,7 @@ func (m *Manager) GetNativeMCCMNC(ctx context.Context) (mcc, mnc string, err err
 		mcc string
 		mnc string
 	}
-	location, err := withUIMRecoveryValue(m, "GetNativeMCCMNC", func(uim *qmi.UIMService) (nativeLocation, error) {
+	location, err := withUIMRecoveryValueContext(m, ctx, "GetNativeMCCMNC", func(uim *qmi.UIMService) (nativeLocation, error) {
 		localMCC, localMNC, callErr := uim.GetNativeMCCMNC(ctx)
 		return nativeLocation{
 			mcc: localMCC,

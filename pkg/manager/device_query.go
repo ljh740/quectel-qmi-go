@@ -292,7 +292,7 @@ func (m *Manager) GetIMSIStrictLive(ctx context.Context) (string, error) {
 	lastErr = err
 
 	// 降级尝试 UIM 透明获取
-	imsi, err = withUIMRecoveryValue(m, "GetIMSI.UIM", func(uim *qmi.UIMService) (string, error) {
+	imsi, err = withUIMRecoveryValueContext(m, ctx, "GetIMSI.UIM", func(uim *qmi.UIMService) (string, error) {
 		return uim.GetIMSI(ctx)
 	})
 	if err == nil && imsi != "" {
@@ -321,7 +321,7 @@ func (m *Manager) GetICCIDStrictLive(ctx context.Context) (string, error) {
 	}
 	lastErr = err
 
-	iccid, err = withUIMRecoveryValue(m, "GetICCID", func(uim *qmi.UIMService) (string, error) {
+	iccid, err = withUIMRecoveryValueContext(m, ctx, "GetICCID", func(uim *qmi.UIMService) (string, error) {
 		return uim.GetICCID(ctx)
 	})
 	if err == nil && iccid != "" {
@@ -332,91 +332,91 @@ func (m *Manager) GetICCIDStrictLive(ctx context.Context) (string, error) {
 
 // UIMGetSlotStatus 获取物理/逻辑卡槽状态
 func (m *Manager) UIMGetSlotStatus(ctx context.Context) (*qmi.UIMSlotStatus, error) {
-	return withUIMRecoveryValue(m, "UIMGetSlotStatus", func(uim *qmi.UIMService) (*qmi.UIMSlotStatus, error) {
+	return withUIMRecoveryValueContext(m, ctx, "UIMGetSlotStatus", func(uim *qmi.UIMService) (*qmi.UIMSlotStatus, error) {
 		return uim.GetSlotStatus(ctx)
 	})
 }
 
 // UIMSwitchSlot 切换逻辑 slot 到目标物理 slot
 func (m *Manager) UIMSwitchSlot(ctx context.Context, logicalSlot uint8, physicalSlot uint32) error {
-	return m.withUIMRecovery("UIMSwitchSlot", func(uim *qmi.UIMService) error {
+	return m.withUIMRecoveryContext(ctx, "UIMSwitchSlot", func(uim *qmi.UIMService) error {
 		return uim.SwitchSlot(ctx, logicalSlot, physicalSlot)
 	})
 }
 
 // UIMReadRecord 读取 record 型 EF 文件
 func (m *Manager) UIMReadRecord(ctx context.Context, fileID uint16, path []uint8, recordNumber uint16, recordLength uint16) (*qmi.UIMRecordData, error) {
-	return withUIMRecoveryValue(m, "UIMReadRecord", func(uim *qmi.UIMService) (*qmi.UIMRecordData, error) {
+	return withUIMRecoveryValueContext(m, ctx, "UIMReadRecord", func(uim *qmi.UIMService) (*qmi.UIMRecordData, error) {
 		return uim.ReadRecord(ctx, fileID, path, recordNumber, recordLength)
 	})
 }
 
 // UIMReadRecordWithSession 使用指定 session 读取 record 型 EF 文件
 func (m *Manager) UIMReadRecordWithSession(ctx context.Context, sessionType uint8, fileID uint16, path []uint8, recordNumber uint16, recordLength uint16) (*qmi.UIMRecordData, error) {
-	return withUIMRecoveryValue(m, "UIMReadRecordWithSession", func(uim *qmi.UIMService) (*qmi.UIMRecordData, error) {
+	return withUIMRecoveryValueContext(m, ctx, "UIMReadRecordWithSession", func(uim *qmi.UIMService) (*qmi.UIMRecordData, error) {
 		return uim.ReadRecordWithSession(ctx, sessionType, fileID, path, recordNumber, recordLength)
 	})
 }
 
 // UIMGetFileAttributes 获取 SIM 文件元数据
 func (m *Manager) UIMGetFileAttributes(ctx context.Context, fileID uint16, path []uint8) (*qmi.UIMFileAttributes, error) {
-	return withUIMRecoveryValue(m, "UIMGetFileAttributes", func(uim *qmi.UIMService) (*qmi.UIMFileAttributes, error) {
+	return withUIMRecoveryValueContext(m, ctx, "UIMGetFileAttributes", func(uim *qmi.UIMService) (*qmi.UIMFileAttributes, error) {
 		return uim.GetFileAttributes(ctx, fileID, path)
 	})
 }
 
 // UIMGetFileAttributesWithSession 使用指定 session 获取 SIM 文件元数据
 func (m *Manager) UIMGetFileAttributesWithSession(ctx context.Context, sessionType uint8, fileID uint16, path []uint8) (*qmi.UIMFileAttributes, error) {
-	return withUIMRecoveryValue(m, "UIMGetFileAttributesWithSession", func(uim *qmi.UIMService) (*qmi.UIMFileAttributes, error) {
+	return withUIMRecoveryValueContext(m, ctx, "UIMGetFileAttributesWithSession", func(uim *qmi.UIMService) (*qmi.UIMFileAttributes, error) {
 		return uim.GetFileAttributesWithSession(ctx, sessionType, fileID, path)
 	})
 }
 
 // UIMReadTransparentWithSession 使用指定 session 读取 transparent 型 EF 文件
 func (m *Manager) UIMReadTransparentWithSession(ctx context.Context, sessionType uint8, fileID uint16, path []uint8) ([]byte, error) {
-	return withUIMRecoveryValue(m, "UIMReadTransparentWithSession", func(uim *qmi.UIMService) ([]byte, error) {
+	return withUIMRecoveryValueContext(m, ctx, "UIMReadTransparentWithSession", func(uim *qmi.UIMService) ([]byte, error) {
 		return uim.ReadTransparentWithSession(ctx, sessionType, fileID, path)
 	})
 }
 
 // UIMRegisterEvents 注册 UIM 事件掩码
 func (m *Manager) UIMRegisterEvents(ctx context.Context, mask uint32) (uint32, error) {
-	return withUIMRecoveryValue(m, "UIMRegisterEvents", func(uim *qmi.UIMService) (uint32, error) {
+	return withUIMRecoveryValueContext(m, ctx, "UIMRegisterEvents", func(uim *qmi.UIMService) (uint32, error) {
 		return uim.RegisterEvents(ctx, mask)
 	})
 }
 
 // UIMGetSupportedMessages 获取 UIM service 支持的消息 ID
 func (m *Manager) UIMGetSupportedMessages(ctx context.Context) ([]uint8, error) {
-	return withUIMRecoveryValue(m, "UIMGetSupportedMessages", func(uim *qmi.UIMService) ([]uint8, error) {
+	return withUIMRecoveryValueContext(m, ctx, "UIMGetSupportedMessages", func(uim *qmi.UIMService) ([]uint8, error) {
 		return uim.GetSupportedMessages(ctx)
 	})
 }
 
 // UIMReset 重置 UIM service 状态
 func (m *Manager) UIMReset(ctx context.Context) error {
-	return m.withUIMRecovery("UIMReset", func(uim *qmi.UIMService) error {
+	return m.withUIMRecoveryContext(ctx, "UIMReset", func(uim *qmi.UIMService) error {
 		return uim.Reset(ctx)
 	})
 }
 
 // UIMPowerOffSIM 关闭指定 slot 的 SIM 电源
 func (m *Manager) UIMPowerOffSIM(ctx context.Context, slot uint8) error {
-	return m.withUIMRecovery("UIMPowerOffSIM", func(uim *qmi.UIMService) error {
+	return m.withUIMRecoveryContext(ctx, "UIMPowerOffSIM", func(uim *qmi.UIMService) error {
 		return uim.PowerOffSIM(ctx, slot)
 	})
 }
 
 // UIMPowerOnSIM 打开指定 slot 的 SIM 电源
 func (m *Manager) UIMPowerOnSIM(ctx context.Context, slot uint8) error {
-	return m.withUIMRecovery("UIMPowerOnSIM", func(uim *qmi.UIMService) error {
+	return m.withUIMRecoveryContext(ctx, "UIMPowerOnSIM", func(uim *qmi.UIMService) error {
 		return uim.PowerOnSIM(ctx, slot)
 	})
 }
 
 // UIMChangeProvisioningSession 切换 UIM provisioning session
 func (m *Manager) UIMChangeProvisioningSession(ctx context.Context, req qmi.UIMChangeProvisioningSessionRequest) error {
-	return m.withUIMRecovery("UIMChangeProvisioningSession", func(uim *qmi.UIMService) error {
+	return m.withUIMRecoveryContext(ctx, "UIMChangeProvisioningSession", func(uim *qmi.UIMService) error {
 		return uim.ChangeProvisioningSession(ctx, req)
 	})
 }
@@ -536,21 +536,21 @@ func sleepWithContext(ctx context.Context, d time.Duration) error {
 
 // UIMRefreshRegister 注册 UIM refresh 文件列表
 func (m *Manager) UIMRefreshRegister(ctx context.Context, req qmi.UIMRefreshRegisterRequest) error {
-	return m.withUIMRecovery("UIMRefreshRegister", func(uim *qmi.UIMService) error {
+	return m.withUIMRecoveryContext(ctx, "UIMRefreshRegister", func(uim *qmi.UIMService) error {
 		return uim.RefreshRegister(ctx, req)
 	})
 }
 
 // UIMRefreshComplete 上报 UIM refresh 处理完成
 func (m *Manager) UIMRefreshComplete(ctx context.Context, req qmi.UIMRefreshCompleteRequest) error {
-	return m.withUIMRecovery("UIMRefreshComplete", func(uim *qmi.UIMService) error {
+	return m.withUIMRecoveryContext(ctx, "UIMRefreshComplete", func(uim *qmi.UIMService) error {
 		return uim.RefreshComplete(ctx, req)
 	})
 }
 
 // UIMRefreshRegisterAll 注册 UIM 全文件 refresh
 func (m *Manager) UIMRefreshRegisterAll(ctx context.Context, req qmi.UIMRefreshRegisterAllRequest) error {
-	return m.withUIMRecovery("UIMRefreshRegisterAll", func(uim *qmi.UIMService) error {
+	return m.withUIMRecoveryContext(ctx, "UIMRefreshRegisterAll", func(uim *qmi.UIMService) error {
 		return uim.RefreshRegisterAll(ctx, req)
 	})
 }
