@@ -232,3 +232,56 @@ func TestLockContextRejectsCancelledContext(t *testing.T) {
 	}
 	mu.Unlock()
 }
+
+// 惰性分配阶段被调用方主动取消：返回 Canceled，不上报、不入队 core recovery。
+func TestEnsureUIMServiceContextCancelDoesNotScheduleRecovery(t *testing.T) {
+	m := newUIMContextTestManager()
+	m.client = &qmi.Client{}
+	m.cfg.RecoveryPolicy.ServiceTimeoutThreshold = 1
+	m.uimRecoveryMu.Lock()
+	defer m.uimRecoveryMu.Unlock()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		cancel()
+	}()
+	_, err := withUIMRecoveryValueContext(m, ctx, "UIMPowerOnSIM", func(*qmi.UIMService) (struct{}, error) {
+		t.Fatal("operation must not run without a service")
+		return struct{}{}, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("withUIMRecoveryValueContext = %v, want Canceled", err)
+	}
+	select {
+	case evt := <-m.eventCh:
+		t.Fatalf("caller cancellation during lazy allocation scheduled %v, want nothing", evt)
+	case <-time.After(100 * time.Millisecond):
+	}
+}
+
+// 重绑阶段被调用方主动取消：重绑错误原样返回，不入队 core recovery。
+func TestWithUIMRecoveryContextRebindCancelDoesNotScheduleRecovery(t *testing.T) {
+	m := newUIMContextTestManager()
+	m.cfg.RecoveryPolicy.ServiceTimeoutThreshold = 1
+	uim := &qmi.UIMService{}
+	m.ensureUIMServiceHook = func() (*qmi.UIMService, error) { return uim, nil }
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	rebindErr := errors.New("allocate client ID aborted: context canceled")
+	m.rebindUIMServiceHook = func(reason string) (*qmi.UIMService, error) {
+		cancel()
+		return nil, rebindErr
+	}
+	err := m.withUIMRecoveryContext(ctx, "UIMPowerOnSIM", func(*qmi.UIMService) error {
+		return recoverableQMIError(qmi.ServiceUIM, qmi.UIMPowerOnSIM)
+	})
+	if !errors.Is(err, rebindErr) {
+		t.Fatalf("withUIMRecoveryContext = %v, want the rebind error", err)
+	}
+	select {
+	case evt := <-m.eventCh:
+		t.Fatalf("caller cancellation during rebind scheduled %v, want nothing", evt)
+	case <-time.After(100 * time.Millisecond):
+	}
+}

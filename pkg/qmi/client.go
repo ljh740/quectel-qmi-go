@@ -1049,19 +1049,25 @@ func (c *Client) AllocateClientIDWithContext(ctx context.Context, service uint8)
 			return clientID, nil
 		}
 		lastErr = err
-		if ctx.Err() != nil {
-			break
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return 0, allocateClientIDAbortedError(retry+1, lastErr, ctxErr)
 		}
 		retryTimer := time.NewTimer(500 * time.Millisecond)
 		select {
 		case <-ctx.Done():
 			retryTimer.Stop()
-			return 0, fmt.Errorf("allocate client ID request failed after retries: %w", lastErr)
+			return 0, allocateClientIDAbortedError(retry+1, lastErr, ctx.Err())
 		case <-retryTimer.C:
 		}
 	}
 
 	return 0, fmt.Errorf("allocate client ID request failed after retries: %w", lastErr)
+}
+
+// allocateClientIDAbortedError 以调用方的 ctx 错误为主体（errors.Is 可判定取消/超时），最后一次请求错误只作诊断信息。
+// allocateClientIDAbortedError wraps the caller's context error so cancellation and deadlines stay identifiable.
+func allocateClientIDAbortedError(attempts int, lastErr, ctxErr error) error {
+	return fmt.Errorf("allocate client ID aborted after %d attempt(s) (last error: %v): %w", attempts, lastErr, ctxErr)
 }
 
 // ReleaseClientID releases a client ID for the given service / ReleaseClientID释放给定服务的客户端ID

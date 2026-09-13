@@ -36,7 +36,8 @@ func withUIMRecoveryValueContext[T any](m *Manager, ctx context.Context, op stri
 
 	uim, err := m.ensureUIMServiceContext(ctx)
 	if err != nil {
-		if m.shouldRecoverUIMError(op, err) {
+		// 调用方主动取消不是设备故障：不上报、不触发整机恢复；真实超时/服务错误照常上报。
+		if !callerCancelled(ctx) && m.shouldRecoverUIMError(op, err) {
 			m.triggerCoreRecoveryFromService("UIM", op, "initial", err)
 		}
 		return zero, err
@@ -72,7 +73,9 @@ func withUIMRecoveryValueContext[T any](m *Manager, ctx context.Context, op stri
 	m.uimRecoveryMu.Unlock()
 	if rebindErr != nil {
 		m.logServiceRecovery("UIM", op, "rebind", rebindErr, "UIM service rebind failed")
-		m.triggerCoreRecoveryFromService("UIM", op, "rebind", rebindErr)
+		if !callerCancelled(ctx) {
+			m.triggerCoreRecoveryFromService("UIM", op, "rebind", rebindErr)
+		}
 		return zero, fmt.Errorf("%s: UIM rebind failed: %w (initial=%v)", op, rebindErr, err)
 	}
 
@@ -82,11 +85,16 @@ func withUIMRecoveryValueContext[T any](m *Manager, ctx context.Context, op stri
 		m.log.WithField("service_name", "UIM").WithField("op", op).WithField("phase", "retry").Info("UIM operation recovered after rebind")
 		return retryResult, nil
 	}
-	if m.shouldRecoverUIMError(op, retryErr) {
+	if !callerCancelled(ctx) && m.shouldRecoverUIMError(op, retryErr) {
 		m.logServiceRecovery("UIM", op, "retry", retryErr, "UIM operation still failing after rebind")
 		m.triggerCoreRecoveryFromService("UIM", op, "retry", retryErr)
 	}
 	return retryResult, retryErr
+}
+
+// callerCancelled 报告调用方是否主动取消（区别于期限到期）。
+func callerCancelled(ctx context.Context) bool {
+	return errors.Is(ctx.Err(), context.Canceled)
 }
 
 // lockContext 在 ctx 期限内获取 mu；没有期限/取消信号的 ctx 直接阻塞等待。
