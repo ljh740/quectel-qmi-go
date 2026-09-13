@@ -166,6 +166,15 @@ func (m *Manager) triggerCoreRecoveryFromUIM(op string, phase string, cause erro
 }
 
 func (m *Manager) enqueueModemResetEvent(source string) {
+	m.enqueueModemResetEventOpts(source, false)
+}
+
+// enqueueModemResetEventOpts 投递一次 modem reset 恢复事件。
+// guaranteed 为 true（显式恢复请求）时不受去抖窗口影响：已有恢复在途则合并为待处理（在途恢复结束后再跑一次），
+// 已有事件排队则由该事件的尝试代为服务，否则一定入队；因此显式请求总能对应到一次在其之后启动的恢复尝试。
+// Explicit (guaranteed) requests bypass the debounce window so that every issued recovery ticket is
+// eventually served by an attempt that starts after it.
+func (m *Manager) enqueueModemResetEventOpts(source string, guaranteed bool) {
 	if m == nil {
 		return
 	}
@@ -180,13 +189,20 @@ func (m *Manager) enqueueModemResetEvent(source string) {
 		m.log.WithField("source", source).Debug("Coalesced modem-reset event while recovery is running")
 		return
 	}
-	if !m.modemResetEnqueuedAt.IsZero() && now.Sub(m.modemResetEnqueuedAt) < m.modemResetDedupWindow {
+	if m.modemResetQueued {
+		m.resetCoalesced.Add(1)
+		m.modemResetMu.Unlock()
+		m.log.WithField("source", source).Debug("Coalesced modem-reset event: another reset event is already queued")
+		return
+	}
+	if !guaranteed && !m.modemResetEnqueuedAt.IsZero() && now.Sub(m.modemResetEnqueuedAt) < m.modemResetDedupWindow {
 		m.resetCoalesced.Add(1)
 		m.modemResetMu.Unlock()
 		m.log.WithField("source", source).Debug("Deduplicated modem-reset event inside debounce window")
 		return
 	}
 	m.modemResetEnqueuedAt = now
+	m.modemResetQueued = true
 	m.modemResetMu.Unlock()
 
 	select {
@@ -212,6 +228,7 @@ func (m *Manager) enqueueModemResetEvent(source string) {
 		if m.modemResetRecovering {
 			m.modemResetPending = true
 			m.resetCoalesced.Add(1)
+			m.modemResetQueued = false
 			m.modemResetMu.Unlock()
 			return
 		}
@@ -234,8 +251,9 @@ func (m *Manager) enqueueModemResetEvent(source string) {
 				m.modemResetDeferred = false
 				// clear debounce timestamp so deferred retry is not swallowed by dedup window
 				m.modemResetEnqueuedAt = time.Time{}
+				m.modemResetQueued = false
 				m.modemResetMu.Unlock()
-				m.enqueueModemResetEvent(source + "_deferred_retry")
+				m.enqueueModemResetEventOpts(source+"_deferred_retry", guaranteed)
 			})
 		}
 	})

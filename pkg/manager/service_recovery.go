@@ -247,26 +247,8 @@ func (m *Manager) triggerCoreRecoveryFromService(service string, op string, phas
 // flows that have already classified a service stall, such as post-eSIM-switch
 // convergence.
 func (m *Manager) RequestCoreRecovery(reason string) bool {
-	if m == nil {
-		return false
-	}
-	reason = strings.TrimSpace(reason)
-	if reason == "" {
-		reason = "external_request"
-	}
-
-	m.mu.RLock()
-	coreReady := m.coreReady
-	stopping := m.state == StateStopping
-	m.mu.RUnlock()
-	if !coreReady || stopping {
-		return false
-	}
-
-	cause := fmt.Errorf("%s", reason)
-	m.logServiceRecovery("POST_SWITCH", reason, "recover-core", cause, "Scheduling core recovery due to explicit request")
-	m.enqueueModemResetEvent("post_switch_recovery")
-	return true
+	_, scheduled := m.RequestCoreRecoveryTicket(reason)
+	return scheduled
 }
 
 func (m *Manager) maybeReplayWMSStateAfterRebind(reason string) {

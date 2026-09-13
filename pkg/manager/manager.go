@@ -213,6 +213,8 @@ type Manager struct {
 	modemResetDedupWindow   time.Duration
 	modemResetQuietWindow   time.Duration
 	modemResetDeferred      bool
+	modemResetQueued        bool // 重置事件已入队、尚未被事件循环取走 / reset event queued but not yet picked up
+	coreRecoveryTickets     coreRecoveryTicketState
 	uimRecoveryMu           sync.Mutex
 	dmsRecoveryMu           sync.Mutex
 	nasRecoveryMu           sync.Mutex
@@ -2961,6 +2963,7 @@ func (m *Manager) handleModemResetEvent() {
 	}
 
 	m.modemResetMu.Lock()
+	m.modemResetQueued = false
 	if m.modemResetRecovering {
 		m.modemResetPending = true
 		m.resetCoalesced.Add(1)
@@ -2987,7 +2990,8 @@ func (m *Manager) handleModemResetEvent() {
 		} else {
 			m.log.Warn("Processing coalesced modem reset event after failed recovery attempt")
 		}
-		m.enqueueModemResetEvent("pending_after_recovery")
+		// 待处理恢复代表被合并的请求（可能含显式票号），不能再被去抖窗口吞掉。
+		m.enqueueModemResetEventOpts("pending_after_recovery", true)
 	}
 }
 
@@ -3072,6 +3076,8 @@ func (m *Manager) doRecoverFromModemReset() bool {
 		return false
 	}
 
+	// 本次尝试服务截至此刻已发放的全部恢复票号 / this attempt serves every ticket issued so far.
+	m.coreRecoveryTickets.beginAttempt()
 	m.recoverAttempts.Add(1)
 	m.doDisconnect()
 	m.cleanup()
@@ -3098,6 +3104,7 @@ func (m *Manager) doRecoverFromModemReset() bool {
 			m.log.WithError(openErr).Warn("Control device node missing; emitting device_removed terminal event")
 			m.recoverCount = 0
 			m.recoverFirstFailAt = time.Time{}
+			m.coreRecoveryTickets.markExhausted()
 			m.emitEvent(Event{Type: EventRecoveryExhausted, State: StateDisconnected, Error: openErr, Reason: "device_removed"})
 			return false
 		}
@@ -3157,6 +3164,7 @@ func (m *Manager) doRecoverFromModemReset() bool {
 	m.mu.Lock()
 	m.markCoreReadyLocked("recover_converged")
 	m.mu.Unlock()
+	m.coreRecoveryTickets.completeAttempt()
 	m.setState(StateDisconnected)
 	if desiredConnection && m.cfg.AutoReconnect {
 		m.scheduleAfter(2*time.Second, func() {
@@ -3274,6 +3282,7 @@ func (m *Manager) scheduleRecoverRetry(reason string) {
 			Warn("Core recovery exhausted; emitting terminal event and stopping retries")
 		m.recoverCount = 0
 		m.recoverFirstFailAt = time.Time{}
+		m.coreRecoveryTickets.markExhausted()
 		m.emitEvent(Event{Type: EventRecoveryExhausted, State: StateDisconnected, Reason: "recovery_exhausted"})
 		return
 	}
