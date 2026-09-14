@@ -564,126 +564,126 @@ func (m *Manager) GetSIMStatus(ctx context.Context) (qmi.SIMStatus, error) {
 
 // GetServingSystem 获取当前网络服务系统信息
 func (m *Manager) GetServingSystem(ctx context.Context) (*qmi.ServingSystem, error) {
-	return withNASRecoveryValue(m, "GetServingSystem", func(nas *qmi.NASService) (*qmi.ServingSystem, error) {
+	return withNASRecoveryValueContext(m, ctx, "GetServingSystem", func(nas *qmi.NASService) (*qmi.ServingSystem, error) {
 		return nas.GetServingSystem(ctx)
 	})
 }
 
 // GetSignalStrength 获取信号强度
 func (m *Manager) GetSignalStrength(ctx context.Context) (*qmi.SignalStrength, error) {
-	return withNASRecoveryValue(m, "GetSignalStrength", func(nas *qmi.NASService) (*qmi.SignalStrength, error) {
+	return withNASRecoveryValueContext(m, ctx, "GetSignalStrength", func(nas *qmi.NASService) (*qmi.SignalStrength, error) {
 		return nas.GetSignalStrength(ctx)
 	})
 }
 
 // GetSignalInfo 获取详细信号信息（LTE/5G）
 func (m *Manager) GetSignalInfo(ctx context.Context) (*qmi.SignalInfo, error) {
-	return withNASRecoveryValue(m, "GetSignalInfo", func(nas *qmi.NASService) (*qmi.SignalInfo, error) {
+	return withNASRecoveryValueContext(m, ctx, "GetSignalInfo", func(nas *qmi.NASService) (*qmi.SignalInfo, error) {
 		return nas.GetSignalInfo(ctx)
 	})
 }
 
 // GetSysInfo 获取系统信息（CellID/TAC/LAC）
 func (m *Manager) GetSysInfo(ctx context.Context) (*qmi.SysInfo, error) {
-	return withNASRecoveryValue(m, "GetSysInfo", func(nas *qmi.NASService) (*qmi.SysInfo, error) {
+	return withNASRecoveryValueContext(m, ctx, "GetSysInfo", func(nas *qmi.NASService) (*qmi.SysInfo, error) {
 		return nas.GetSysInfo(ctx)
 	})
 }
 
 // NASGetRFBandInfo 获取当前频段与信道信息
 func (m *Manager) NASGetRFBandInfo(ctx context.Context) (*qmi.RFBandInfo, error) {
-	return withNASRecoveryValue(m, "NASGetRFBandInfo", func(nas *qmi.NASService) (*qmi.RFBandInfo, error) {
+	return withNASRecoveryValueContext(m, ctx, "NASGetRFBandInfo", func(nas *qmi.NASService) (*qmi.RFBandInfo, error) {
 		return nas.GetRFBandInfo(ctx)
 	})
 }
 
 // NASGetTechnologyPreference 获取当前 RAT 偏好
 func (m *Manager) NASGetTechnologyPreference(ctx context.Context) (*qmi.TechnologyPreference, error) {
-	return withNASRecoveryValue(m, "NASGetTechnologyPreference", func(nas *qmi.NASService) (*qmi.TechnologyPreference, error) {
+	return withNASRecoveryValueContext(m, ctx, "NASGetTechnologyPreference", func(nas *qmi.NASService) (*qmi.TechnologyPreference, error) {
 		return nas.GetTechnologyPreference(ctx)
 	})
 }
 
 // NASSetTechnologyPreference 设置当前 RAT 偏好
 func (m *Manager) NASSetTechnologyPreference(ctx context.Context, pref qmi.TechnologyPreference) error {
-	return m.withNASRecovery("NASSetTechnologyPreference", func(nas *qmi.NASService) error {
+	return m.withNASRecoveryContext(ctx, "NASSetTechnologyPreference", func(nas *qmi.NASService) error {
 		return nas.SetTechnologyPreference(ctx, pref)
 	})
 }
 
 // NASGetSystemSelectionPreference 获取系统选择策略
 func (m *Manager) NASGetSystemSelectionPreference(ctx context.Context) (*qmi.SystemSelectionPreference, error) {
-	return withNASRecoveryValue(m, "NASGetSystemSelectionPreference", func(nas *qmi.NASService) (*qmi.SystemSelectionPreference, error) {
+	return withNASRecoveryValueContext(m, ctx, "NASGetSystemSelectionPreference", func(nas *qmi.NASService) (*qmi.SystemSelectionPreference, error) {
 		return nas.GetSystemSelectionPreference(ctx)
 	})
 }
 
 // NASSetSystemSelectionPreference 设置系统选择策略
 func (m *Manager) NASSetSystemSelectionPreference(ctx context.Context, pref qmi.SystemSelectionPreference) error {
-	return m.withNASRecovery("NASSetSystemSelectionPreference", func(nas *qmi.NASService) error {
+	return m.withNASRecoveryContext(ctx, "NASSetSystemSelectionPreference", func(nas *qmi.NASService) error {
 		return nas.SetSystemSelectionPreference(ctx, pref)
 	})
 }
 
 // NASGetCellLocationInfo 获取当前小区位置与制式信息
 func (m *Manager) NASGetCellLocationInfo(ctx context.Context) (*qmi.CellLocationInfo, error) {
-	return withNASRecoveryValue(m, "NASGetCellLocationInfo", func(nas *qmi.NASService) (*qmi.CellLocationInfo, error) {
+	return withNASRecoveryValueContext(m, ctx, "NASGetCellLocationInfo", func(nas *qmi.NASService) (*qmi.CellLocationInfo, error) {
 		return nas.GetCellLocationInfo(ctx)
 	})
 }
 
 // NASGetNetworkTime 获取网络时间
 func (m *Manager) NASGetNetworkTime(ctx context.Context) (*qmi.NetworkTimeInfo, error) {
-	return withNASRecoveryValue(m, "NASGetNetworkTime", func(nas *qmi.NASService) (*qmi.NetworkTimeInfo, error) {
+	return withNASRecoveryValueContext(m, ctx, "NASGetNetworkTime", func(nas *qmi.NASService) (*qmi.NetworkTimeInfo, error) {
 		return nas.GetNetworkTime(ctx)
 	})
 }
 
 // NASInitiateNetworkRegister 发起自动/手动驻网
 func (m *Manager) NASInitiateNetworkRegister(ctx context.Context, req qmi.NASInitiateNetworkRegisterRequest) error {
-	return m.withNASRecovery("NASInitiateNetworkRegister", func(nas *qmi.NASService) error {
+	return m.withNASRecoveryContext(ctx, "NASInitiateNetworkRegister", func(nas *qmi.NASService) error {
 		return nas.InitiateNetworkRegister(ctx, req)
 	})
 }
 
 // NASForceNetworkSearch 强制 modem 重新搜网
 func (m *Manager) NASForceNetworkSearch(ctx context.Context) error {
-	return m.withNASRecovery("NASForceNetworkSearch", func(nas *qmi.NASService) error {
+	return m.withNASRecoveryContext(ctx, "NASForceNetworkSearch", func(nas *qmi.NASService) error {
 		return nas.ForceNetworkSearch(ctx)
 	})
 }
 
 // NASAttachDetach 设置 PS 附着状态
 func (m *Manager) NASAttachDetach(ctx context.Context, attached bool) error {
-	return m.withNASRecovery("NASAttachDetach", func(nas *qmi.NASService) error {
+	return m.withNASRecoveryContext(ctx, "NASAttachDetach", func(nas *qmi.NASService) error {
 		return nas.AttachDetach(ctx, attached)
 	})
 }
 
 // NASGetOperatorName 获取当前运营商名称
 func (m *Manager) NASGetOperatorName(ctx context.Context) (*qmi.NASOperatorNameInfo, error) {
-	return withNASRecoveryValue(m, "NASGetOperatorName", func(nas *qmi.NASService) (*qmi.NASOperatorNameInfo, error) {
+	return withNASRecoveryValueContext(m, ctx, "NASGetOperatorName", func(nas *qmi.NASService) (*qmi.NASOperatorNameInfo, error) {
 		return nas.GetOperatorName(ctx)
 	})
 }
 
 // NASGetPLMNName 获取指定 PLMN 的长短名称
 func (m *Manager) NASGetPLMNName(ctx context.Context, req qmi.NASPLMNNameRequest) (*qmi.NASPLMNNameInfo, error) {
-	return withNASRecoveryValue(m, "NASGetPLMNName", func(nas *qmi.NASService) (*qmi.NASPLMNNameInfo, error) {
+	return withNASRecoveryValueContext(m, ctx, "NASGetPLMNName", func(nas *qmi.NASService) (*qmi.NASPLMNNameInfo, error) {
 		return nas.GetPLMNName(ctx, req)
 	})
 }
 
 // NASConfigSignalInfoV2 配置信号变化上报阈值
 func (m *Manager) NASConfigSignalInfoV2(ctx context.Context, cfg qmi.NASSignalInfoConfigV2) error {
-	return m.withNASRecovery("NASConfigSignalInfoV2", func(nas *qmi.NASService) error {
+	return m.withNASRecoveryContext(ctx, "NASConfigSignalInfoV2", func(nas *qmi.NASService) error {
 		return nas.ConfigSignalInfoV2(ctx, cfg)
 	})
 }
 
 // NASRegisterIndications 注册 NAS indication 上报开关
 func (m *Manager) NASRegisterIndications(ctx context.Context, cfg qmi.NASIndicationRegistration) error {
-	return m.withNASRecovery("NASRegisterIndications", func(nas *qmi.NASService) error {
+	return m.withNASRecoveryContext(ctx, "NASRegisterIndications", func(nas *qmi.NASService) error {
 		return nas.RegisterIndicationsWithConfig(ctx, cfg)
 	})
 }
@@ -1155,7 +1155,7 @@ func (e *SMSNotReadyError) Error() string {
 }
 
 func (m *Manager) NASPerformNetworkScan(ctx context.Context) ([]qmi.NetworkScanResult, error) {
-	return withNASRecoveryValue(m, "NASPerformNetworkScan", func(nas *qmi.NASService) ([]qmi.NetworkScanResult, error) {
+	return withNASRecoveryValueContext(m, ctx, "NASPerformNetworkScan", func(nas *qmi.NASService) ([]qmi.NetworkScanResult, error) {
 		return nas.PerformNetworkScan(ctx)
 	})
 }

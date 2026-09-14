@@ -473,6 +473,11 @@ func (n *NASService) Close() error {
 	return n.client.ReleaseClientID(ServiceNAS, n.clientID)
 }
 
+// CloseWithContext releases the NAS client ID within ctx's deadline.
+func (n *NASService) CloseWithContext(ctx context.Context) error {
+	return n.client.ReleaseClientIDWithContext(ctx, ServiceNAS, n.clientID)
+}
+
 func (n *NASService) ClientID() uint8 {
 	return n.clientID
 }

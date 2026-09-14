@@ -1071,7 +1071,7 @@ func (m *Manager) getServingSystem(ctx context.Context) (*qmi.ServingSystem, err
 	if m.queryServingSystem != nil {
 		return m.queryServingSystem(ctx)
 	}
-	return withNASRecoveryValue(m, "getServingSystem", func(nas *qmi.NASService) (*qmi.ServingSystem, error) {
+	return withNASRecoveryValueContext(m, ctx, "getServingSystem", func(nas *qmi.NASService) (*qmi.ServingSystem, error) {
 		return nas.GetServingSystem(ctx)
 	})
 }
