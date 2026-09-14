@@ -119,3 +119,31 @@ func TestWithNASRecoveryContextStillRebindsWithinDeadline(t *testing.T) {
 		t.Fatalf("attempts = %v, want first then rebound", seen)
 	}
 }
+
+// 真实到期（非主动取消）且达到超时阈值：不重绑、不重试，但调度一次 core recovery，避免 NAS 持续无响应得不到恢复。
+func TestWithNASRecoveryContextSchedulesRecoveryOnRepeatedDeadline(t *testing.T) {
+	m := newNASContextTestManager()
+	m.cfg.RecoveryPolicy.ServiceTimeoutThreshold = 1
+	nas := &qmi.NASService{}
+	m.ensureNASServiceHook = func() (*qmi.NASService, error) { return nas, nil }
+	var rebinds int
+	m.rebindNASServiceHook = func(reason string) (*qmi.NASService, error) {
+		rebinds++
+		return nas, nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := m.withNASRecoveryContext(ctx, "NASInitiateNetworkRegister", func(*qmi.NASService) error {
+		<-ctx.Done()
+		return ctx.Err()
+	})
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("withNASRecoveryContext = %v, want the operation's DeadlineExceeded", err)
+	}
+	if rebinds != 0 {
+		t.Fatalf("rebinds = %d, want 0 after the deadline", rebinds)
+	}
+	if evt := waitInternalRecoveryEvent(t, m.eventCh, time.Second); evt != eventModemReset {
+		t.Fatalf("scheduled %v, want eventModemReset", evt)
+	}
+}
