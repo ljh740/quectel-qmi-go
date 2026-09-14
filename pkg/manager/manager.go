@@ -1062,7 +1062,7 @@ func (m *Manager) getSignalStrength(ctx context.Context) (*qmi.SignalStrength, e
 	if m.querySignalStrength != nil {
 		return m.querySignalStrength(ctx)
 	}
-	return withNASRecoveryValue(m, "getSignalStrength", func(nas *qmi.NASService) (*qmi.SignalStrength, error) {
+	return withNASRecoveryValueContext(m, ctx, "getSignalStrength", func(nas *qmi.NASService) (*qmi.SignalStrength, error) {
 		return nas.GetSignalStrength(ctx)
 	})
 }
@@ -1071,7 +1071,7 @@ func (m *Manager) getServingSystem(ctx context.Context) (*qmi.ServingSystem, err
 	if m.queryServingSystem != nil {
 		return m.queryServingSystem(ctx)
 	}
-	return withNASRecoveryValue(m, "getServingSystem", func(nas *qmi.NASService) (*qmi.ServingSystem, error) {
+	return withNASRecoveryValueContext(m, ctx, "getServingSystem", func(nas *qmi.NASService) (*qmi.ServingSystem, error) {
 		return nas.GetServingSystem(ctx)
 	})
 }
@@ -1491,7 +1491,7 @@ func (m *Manager) registerNASIndicationsWithContext(ctx context.Context, cfg qmi
 	if m.registerNASIndications != nil {
 		return m.registerNASIndications(ctx, cfg)
 	}
-	return m.withNASRecovery("registerNASIndicationsWithContext", func(nas *qmi.NASService) error {
+	return m.withNASRecoveryContext(ctx, "registerNASIndicationsWithContext", func(nas *qmi.NASService) error {
 		return nas.RegisterIndicationsWithConfig(ctx, cfg)
 	})
 }
@@ -1553,7 +1553,7 @@ func (m *Manager) queryNASRegisteredWithContext(ctx context.Context) (bool, erro
 	if m.queryNASRegistered != nil {
 		return m.queryNASRegistered(ctx)
 	}
-	return withNASRecoveryValue(m, "queryNASRegisteredWithContext", func(nas *qmi.NASService) (bool, error) {
+	return withNASRecoveryValueContext(m, ctx, "queryNASRegisteredWithContext", func(nas *qmi.NASService) (bool, error) {
 		return nas.IsRegistered(ctx)
 	})
 }
@@ -2270,7 +2270,7 @@ func (m *Manager) rotateViaRadioReset() error {
 	}()
 
 	// Initial check in case we already registered / 初始检查，以防我们已经注册了
-	if registered, _ := withNASRecoveryValue(m, "rotateViaRadioReset.IsRegistered", func(nas *qmi.NASService) (bool, error) {
+	if registered, _ := withNASRecoveryValueContext(m, ctx, "rotateViaRadioReset.IsRegistered", func(nas *qmi.NASService) (bool, error) {
 		return nas.IsRegistered(ctx)
 	}); registered {
 		goto registered
@@ -3490,7 +3490,7 @@ func (m *Manager) doConnect() error {
 	}
 
 	// Check registration / 检查注册状态
-	if registered, regErr := withNASRecoveryValue(m, "doConnect.IsRegistered", func(nas *qmi.NASService) (bool, error) {
+	if registered, regErr := withNASRecoveryValueContext(m, dialCtx, "doConnect.IsRegistered", func(nas *qmi.NASService) (bool, error) {
 		return nas.IsRegistered(dialCtx)
 	}); regErr == nil {
 		if !registered {
