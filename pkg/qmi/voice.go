@@ -76,6 +76,7 @@ type VoiceRemotePartyNumber struct {
 type VoiceAllCallInfo struct {
 	Calls              []VoiceCallInfo
 	RemotePartyNumbers []VoiceRemotePartyNumber
+	CallEndReasons     []VoiceCallEndReasonInfo // nil 表示未上报；原因值 0 是 OFFLINE，不能当作缺省值。
 }
 
 type VoiceManageCallsRequest struct {
@@ -312,6 +313,8 @@ func (v *VOICEService) StopContinuousDTMF(ctx context.Context, callID uint8) (ui
 	return parseVoiceCallIDResponse(resp, "stop continuous dtmf")
 }
 
+// GetAllCallInfo 在仅结束原因解析失败时返回可用的 info 和非空 err。
+// 调用方应先处理非空 info 中的呼叫状态，再记录可选字段的解析错误。
 func (v *VOICEService) GetAllCallInfo(ctx context.Context) (*VoiceAllCallInfo, error) {
 	resp, err := v.client.SendRequest(ctx, ServiceVOICE, v.clientID, VOICEGetAllCallInfo, nil)
 	if err != nil {
@@ -403,8 +406,9 @@ func (v *VOICEService) OriginateUSSDNoWait(ctx context.Context, req VoiceUSSDReq
 	return nil
 }
 
+// ParseVoiceAllCallStatus 在仅结束原因解析失败时保留状态与号码，返回 info 和 err。
 func ParseVoiceAllCallStatus(packet *Packet) (*VoiceAllCallInfo, error) {
-	return parseVoiceAllCallInfoPacket(packet, 0x01, 0x10, "all call status indication")
+	return parseVoiceAllCallInfoPacket(packet, 0x01, 0x10, 0x14, "all call status indication")
 }
 
 func ParseVoiceSupplementaryServiceIndication(packet *Packet) (*VoiceSupplementaryServiceIndication, error) {
@@ -677,10 +681,14 @@ func parseVoiceCallIDResponse(resp *Packet, operation string) (uint8, error) {
 }
 
 func parseVoiceAllCallInfoResponse(resp *Packet) (*VoiceAllCallInfo, error) {
-	return parseVoiceAllCallInfoPacket(resp, 0x10, 0x11, "get all call info")
+	// 响应的 0x14 是 UUS；结束原因与状态指示使用不同的 TLV 编号。
+	return parseVoiceAllCallInfoPacket(resp, 0x10, 0x11, 0x18, "get all call info")
 }
 
-func parseVoiceAllCallInfoPacket(packet *Packet, callTLVType uint8, remoteTLVType uint8, operation string) (*VoiceAllCallInfo, error) {
+func parseVoiceAllCallInfoPacket(packet *Packet, callTLVType, remoteTLVType, endReasonTLVType uint8, operation string) (*VoiceAllCallInfo, error) {
+	if packet == nil {
+		return nil, fmt.Errorf("%s missing packet", operation)
+	}
 	if resultTLV := FindTLV(packet.TLVs, 0x02); resultTLV != nil {
 		if err := packet.CheckResult(); err != nil {
 			return nil, fmt.Errorf("%s failed: %w", operation, err)
@@ -705,7 +713,35 @@ func parseVoiceAllCallInfoPacket(packet *Packet, callTLVType uint8, remoteTLVTyp
 		}
 		info.RemotePartyNumbers = numbers
 	}
+	if tlv := FindTLV(packet.TLVs, endReasonTLVType); tlv != nil {
+		reasons, err := parseVoiceCallEndReasonArray(tlv.Value)
+		if err != nil {
+			// 结束原因是可选信息；布局不符时不猜测原因，也不丢弃有效终态。
+			return info, fmt.Errorf("%s call end reason TLV 0x%02x: %w", operation, endReasonTLVType, err)
+		}
+		info.CallEndReasons = reasons
+	}
 	return info, nil
+}
+
+func parseVoiceCallEndReasonArray(value []byte) ([]VoiceCallEndReasonInfo, error) {
+	if len(value) == 0 {
+		return nil, fmt.Errorf("missing array count")
+	}
+	count := int(value[0])
+	// 每项恰为 call_id(u8) + call_end_reason(u16 LE)，不接受截断或尾随字节。
+	if want := 1 + count*3; len(value) != want {
+		return nil, fmt.Errorf("invalid array length: got %d, want %d", len(value), want)
+	}
+	reasons := make([]VoiceCallEndReasonInfo, count)
+	for i := range reasons {
+		offset := 1 + i*3
+		reasons[i] = VoiceCallEndReasonInfo{
+			CallID: value[offset],
+			Reason: VoiceCallEndReason(binary.LittleEndian.Uint16(value[offset+1 : offset+3])),
+		}
+	}
+	return reasons, nil
 }
 
 func parseVoiceSupplementaryServiceStatusResponse(resp *Packet) (*VoiceSupplementaryServiceStatus, error) {

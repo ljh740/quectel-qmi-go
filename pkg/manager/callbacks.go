@@ -291,6 +291,9 @@ func cloneVoiceAllCallInfo(in *qmi.VoiceAllCallInfo) *qmi.VoiceAllCallInfo {
 	if len(in.Calls) > 0 {
 		out.Calls = append([]qmi.VoiceCallInfo(nil), in.Calls...)
 	}
+	if len(in.CallEndReasons) > 0 {
+		out.CallEndReasons = append([]qmi.VoiceCallEndReasonInfo(nil), in.CallEndReasons...)
+	}
 	if len(in.RemotePartyNumbers) > 0 {
 		out.RemotePartyNumbers = make([]qmi.VoiceRemotePartyNumber, len(in.RemotePartyNumbers))
 		for i := range in.RemotePartyNumbers {
