@@ -4211,6 +4211,17 @@ func (m *Manager) handleIndication(evt qmi.Event) {
 		})
 
 	case qmi.EventVoiceCallStatus:
+		meta := packetTLVMeta(evt.Packet)
+		var endReasonRaw []byte
+		if evt.Packet != nil {
+			if tlv := qmi.FindTLV(evt.Packet.TLVs, 0x14); tlv != nil {
+				endReasonRaw = tlv.Value
+			}
+		}
+		// 保留原始 TLV 布局和原因字节供固件核对，不输出号码、姓名等 TLV 的正文。
+		m.log.WithField("tlvs", meta).
+			WithField("call_end_reason_raw", fmt.Sprintf("%x", endReasonRaw)).
+			Debug("VOICE call status TLVs")
 		info, err := qmi.ParseVoiceAllCallStatus(evt.Packet)
 		if err != nil {
 			m.log.WithError(err).Warn("Failed to parse VOICE call status indication")
@@ -4220,6 +4231,7 @@ func (m *Manager) handleIndication(evt qmi.Event) {
 			Type:       EventVoiceCallStatus,
 			State:      m.State(),
 			VoiceCalls: info,
+			TLVMeta:    meta,
 			RawQMIType: evt.Type,
 			ServiceID:  evt.ServiceID,
 			MessageID:  evt.MessageID,
