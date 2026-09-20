@@ -1,6 +1,7 @@
 package qmi
 
 import (
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -127,8 +128,11 @@ func TestParseVoiceCallEndReasonsMalformed(t *testing.T) {
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			info, err := ParseVoiceAllCallStatus(&Packet{TLVs: []TLV{{Type: 0x14, Value: tt.value}}})
-			if err == nil || info != nil || !strings.Contains(err.Error(), "call end reason TLV 0x14") {
+			if err == nil || !strings.Contains(err.Error(), "call end reason TLV 0x14") {
 				t.Fatalf("malformed array accepted: info=%+v err=%v", info, err)
+			}
+			if info == nil || info.CallEndReasons != nil {
+				t.Fatalf("malformed end reason must preserve partial info without guessed reasons: %+v", info)
 			}
 		})
 	}
@@ -136,6 +140,65 @@ func TestParseVoiceCallEndReasonsMalformed(t *testing.T) {
 		if info, err := parse(nil); info != nil || err == nil {
 			t.Fatalf("nil packet: info=%+v err=%v", info, err)
 		}
+	}
+}
+
+func TestParseVoiceCallEndReasonsMalformedKeepsCallInfo(t *testing.T) {
+	for _, tt := range []struct {
+		name       string
+		parse      func(*Packet) (*VoiceAllCallInfo, error)
+		callsTLV   uint8
+		remoteTLV  uint8
+		reasonsTLV uint8
+	}{
+		{"indication", ParseVoiceAllCallStatus, 0x01, 0x10, 0x14},
+		{"response", parseVoiceAllCallInfoResponse, 0x10, 0x11, 0x18},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			packet := &Packet{TLVs: []TLV{
+				{Type: tt.callsTLV, Value: []byte{2, 4, 8, 0, 1, 3, 0, 0, 7, 9, 0, 1, 3, 0, 0}},
+				{Type: tt.remoteTLV, Value: []byte{2, 4, 0, 1, 'a', 7, 1, 1, 'b'}},
+				// 第一项完整也不采用：第二项截断使整个原因数组不可信。
+				{Type: tt.reasonsTLV, Value: []byte{2, 4, 0x9c, 0, 7}},
+				successResultTLV(),
+			}}
+			info, err := tt.parse(packet)
+			if info == nil {
+				t.Fatalf("malformed optional end reason discarded call info: %v", err)
+			}
+			if err == nil || !strings.Contains(err.Error(), fmt.Sprintf("call end reason TLV 0x%02x", tt.reasonsTLV)) {
+				t.Fatalf("partial parse failure was not reported: %v", err)
+			}
+			wantCalls := []VoiceCallInfo{
+				{ID: 4, State: VoiceCallStateDisconnecting, Direction: VoiceCallDirectionMO, Mode: 3},
+				{ID: 7, State: VoiceCallStateEnd, Direction: VoiceCallDirectionMO, Mode: 3},
+			}
+			wantNumbers := []VoiceRemotePartyNumber{
+				{CallID: 4, Number: "a", RawNumber: []byte{'a'}},
+				{CallID: 7, PresentationIndicator: 1, Number: "b", RawNumber: []byte{'b'}},
+			}
+			if !reflect.DeepEqual(info.Calls, wantCalls) || !reflect.DeepEqual(info.RemotePartyNumbers, wantNumbers) || info.CallEndReasons != nil {
+				t.Fatalf("partial call info changed: %+v", info)
+			}
+		})
+	}
+}
+
+func TestParseVoiceCallStatusCoreErrorsRemainFatal(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		tlv  TLV
+	}{
+		{"calls", TLV{Type: 0x01, Value: []byte{1}}},
+		{"remote_number", TLV{Type: 0x10, Value: []byte{1}}},
+		{"qmi_result", TLV{Type: 0x02, Value: []byte{1, 0, 3, 0}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			info, err := ParseVoiceAllCallStatus(&Packet{TLVs: []TLV{tt.tlv}})
+			if info != nil || err == nil {
+				t.Fatalf("core parse error was accepted: info=%+v err=%v", info, err)
+			}
+		})
 	}
 }
 
@@ -159,7 +222,13 @@ func FuzzParseVoiceCallEndReasons(f *testing.F) {
 		if (err == nil) != valid {
 			t.Fatalf("valid=%v err=%v", valid, err)
 		}
+		if info == nil {
+			t.Fatal("optional end reason parse lost partial call info")
+		}
 		if !valid {
+			if info.CallEndReasons != nil {
+				t.Fatalf("malformed array produced guessed reasons: %+v", info.CallEndReasons)
+			}
 			return
 		}
 		if len(info.CallEndReasons) != int(value[0]) {

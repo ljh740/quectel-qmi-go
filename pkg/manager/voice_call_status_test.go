@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ljh740/quectel-qmi-go/pkg/qmi"
 	"github.com/sirupsen/logrus"
@@ -54,6 +55,70 @@ func TestCloneVoiceCallEndReasons(t *testing.T) {
 	}
 	if cloneVoiceAllCallInfo(nil) != nil {
 		t.Fatal("nil clone is not nil")
+	}
+}
+
+func TestHandleIndicationVoiceMalformedEndReasonStillEmits(t *testing.T) {
+	var output bytes.Buffer
+	log := logrus.New()
+	log.SetOutput(&output)
+	log.SetLevel(logrus.WarnLevel)
+	m := &Manager{log: NewLogrusLogger(log), events: NewEventEmitter()}
+	t.Cleanup(m.events.Close)
+	ch := make(chan Event, 1)
+	m.OnVoiceCallStatus(func(info *qmi.VoiceAllCallInfo) { ch <- Event{VoiceCalls: info} })
+	m.handleIndication(qmi.Event{
+		Type: qmi.EventVoiceCallStatus,
+		Packet: &qmi.Packet{TLVs: []qmi.TLV{
+			{Type: 0x01, Value: []byte{2, 4, 8, 0, 1, 3, 0, 0, 7, 9, 0, 1, 3, 0, 0}},
+			{Type: 0x10, Value: []byte{2, 4, 0, 1, 'a', 7, 1, 1, 'b'}},
+			{Type: 0x14, Value: []byte{2, 4, 0x9c, 0, 7}},
+		}},
+	})
+	select {
+	case evt := <-ch:
+		info := evt.VoiceCalls
+		wantCalls := []qmi.VoiceCallInfo{
+			{ID: 4, State: qmi.VoiceCallStateDisconnecting, Direction: qmi.VoiceCallDirectionMO, Mode: 3},
+			{ID: 7, State: qmi.VoiceCallStateEnd, Direction: qmi.VoiceCallDirectionMO, Mode: 3},
+		}
+		wantNumbers := []qmi.VoiceRemotePartyNumber{
+			{CallID: 4, Number: "a", RawNumber: []byte{'a'}},
+			{CallID: 7, PresentationIndicator: 1, Number: "b", RawNumber: []byte{'b'}},
+		}
+		if info == nil || !reflect.DeepEqual(info.Calls, wantCalls) || !reflect.DeepEqual(info.RemotePartyNumbers, wantNumbers) || info.CallEndReasons != nil {
+			t.Fatalf("partial indication lost state or number: %+v", info)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("malformed optional end reason suppressed call status event")
+	}
+	if !strings.Contains(output.String(), "level=warning") || !strings.Contains(output.String(), "call end reason TLV 0x14") {
+		t.Fatalf("partial failure warning missing: %s", output.String())
+	}
+}
+
+func TestVOICERecoveryPreservesPartialCallInfo(t *testing.T) {
+	m := newRecoveryTestManager()
+	t.Cleanup(m.events.Close)
+	m.ensureVOICEServiceHook = func() (*qmi.VOICEService, error) { return &qmi.VOICEService{}, nil }
+	rebinds := 0
+	m.rebindVOICEServiceHook = func(string) (*qmi.VOICEService, error) {
+		rebinds++
+		return &qmi.VOICEService{}, nil
+	}
+	partial, parseErr := qmi.ParseVoiceAllCallStatus(&qmi.Packet{TLVs: []qmi.TLV{
+		{Type: 0x01, Value: []byte{1, 7, 9, 0, 1, 3, 0, 0}},
+		{Type: 0x14, Value: []byte{1}},
+	}})
+	if partial == nil || parseErr == nil {
+		t.Fatalf("fixture: expected partial parse failure, info=%+v err=%v", partial, parseErr)
+	}
+	// 查询路径使用同一恢复包装；可选字段错误不能触发重绑或抹掉结果。
+	info, err := withVOICERecoveryValue(m, "VOICEGetAllCallInfo", func(*qmi.VOICEService) (*qmi.VoiceAllCallInfo, error) {
+		return partial, parseErr
+	})
+	if info != partial || err != parseErr || rebinds != 0 {
+		t.Fatalf("partial query result lost or triggered recovery: info=%+v err=%v rebinds=%d", info, err, rebinds)
 	}
 }
 

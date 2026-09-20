@@ -1050,6 +1050,7 @@ func (m *Manager) VOICEStopContinuousDTMF(ctx context.Context, callID uint8) (ui
 }
 
 // VOICEGetAllCallInfo 获取当前全部通话信息
+// 非空 info 仍可伴随可选结束原因的解析错误，调用方应保留其中的呼叫状态。
 func (m *Manager) VOICEGetAllCallInfo(ctx context.Context) (*qmi.VoiceAllCallInfo, error) {
 	return withVOICERecoveryValue(m, "VOICEGetAllCallInfo", func(voice *qmi.VOICEService) (*qmi.VoiceAllCallInfo, error) {
 		return voice.GetAllCallInfo(ctx)

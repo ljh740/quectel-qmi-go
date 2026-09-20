@@ -4225,7 +4225,9 @@ func (m *Manager) handleIndication(evt qmi.Event) {
 		info, err := qmi.ParseVoiceAllCallStatus(evt.Packet)
 		if err != nil {
 			m.log.WithError(err).Warn("Failed to parse VOICE call status indication")
-			return
+			if info == nil {
+				return
+			}
 		}
 		m.emitEvent(Event{
 			Type:       EventVoiceCallStatus,

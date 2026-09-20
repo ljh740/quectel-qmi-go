@@ -313,6 +313,8 @@ func (v *VOICEService) StopContinuousDTMF(ctx context.Context, callID uint8) (ui
 	return parseVoiceCallIDResponse(resp, "stop continuous dtmf")
 }
 
+// GetAllCallInfo 在仅结束原因解析失败时返回可用的 info 和非空 err。
+// 调用方应先处理非空 info 中的呼叫状态，再记录可选字段的解析错误。
 func (v *VOICEService) GetAllCallInfo(ctx context.Context) (*VoiceAllCallInfo, error) {
 	resp, err := v.client.SendRequest(ctx, ServiceVOICE, v.clientID, VOICEGetAllCallInfo, nil)
 	if err != nil {
@@ -404,6 +406,7 @@ func (v *VOICEService) OriginateUSSDNoWait(ctx context.Context, req VoiceUSSDReq
 	return nil
 }
 
+// ParseVoiceAllCallStatus 在仅结束原因解析失败时保留状态与号码，返回 info 和 err。
 func ParseVoiceAllCallStatus(packet *Packet) (*VoiceAllCallInfo, error) {
 	return parseVoiceAllCallInfoPacket(packet, 0x01, 0x10, 0x14, "all call status indication")
 }
@@ -713,7 +716,8 @@ func parseVoiceAllCallInfoPacket(packet *Packet, callTLVType, remoteTLVType, end
 	if tlv := FindTLV(packet.TLVs, endReasonTLVType); tlv != nil {
 		reasons, err := parseVoiceCallEndReasonArray(tlv.Value)
 		if err != nil {
-			return nil, fmt.Errorf("%s call end reason TLV 0x%02x: %w", operation, endReasonTLVType, err)
+			// 结束原因是可选信息；布局不符时不猜测原因，也不丢弃有效终态。
+			return info, fmt.Errorf("%s call end reason TLV 0x%02x: %w", operation, endReasonTLVType, err)
 		}
 		info.CallEndReasons = reasons
 	}
