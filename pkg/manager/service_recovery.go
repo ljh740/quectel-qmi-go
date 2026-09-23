@@ -155,7 +155,7 @@ func (m *Manager) detectTimeoutStorm(service string) {
 	if m.globalTimeoutServices == nil {
 		m.globalTimeoutServices = make(map[string]time.Time)
 	}
-	
+
 	for svc, t := range m.globalTimeoutServices {
 		if now.Sub(t) > stormWindow {
 			delete(m.globalTimeoutServices, svc)
@@ -326,11 +326,18 @@ func withDMSRecoveryValue[T any](m *Manager, op string, fn func(dms *qmi.DMSServ
 }
 
 func (m *Manager) ensureDMSService() (*qmi.DMSService, error) {
+	return m.ensureDMSServiceContext(context.Background())
+}
+
+func (m *Manager) ensureDMSServiceContext(ctx context.Context) (*qmi.DMSService, error) {
 	if m == nil {
 		return nil, ErrServiceNotReady("DMS")
 	}
 	if m.ensureDMSServiceHook != nil {
 		return m.ensureDMSServiceHook()
+	}
+	if ctx == nil {
+		ctx = context.Background()
 	}
 
 	m.mu.RLock()
@@ -344,7 +351,9 @@ func (m *Manager) ensureDMSService() (*qmi.DMSService, error) {
 		return nil, ErrServiceNotReady("DMS")
 	}
 
-	m.dmsRecoveryMu.Lock()
+	if err := lockContext(ctx, &m.dmsRecoveryMu); err != nil {
+		return nil, fmt.Errorf("allocate DMS client: %w", err)
+	}
 	defer m.dmsRecoveryMu.Unlock()
 
 	m.mu.RLock()
@@ -358,18 +367,19 @@ func (m *Manager) ensureDMSService() (*qmi.DMSService, error) {
 		return nil, ErrServiceNotReady("DMS")
 	}
 
-	allocated, err := qmi.NewDMSService(client)
+	allocated, err := qmi.NewDMSServiceWithContext(ctx, client)
 	if err != nil {
 		return nil, fmt.Errorf("allocate DMS client failed: %w", err)
 	}
 
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.client != client {
-		_ = allocated.Close()
+		m.mu.Unlock()
+		_ = allocated.CloseWithContext(ctx)
 		return nil, ErrServiceNotReady("DMS")
 	}
 	m.dms = allocated
+	m.mu.Unlock()
 	m.log.Info("DMS service lazily allocated")
 	return allocated, nil
 }

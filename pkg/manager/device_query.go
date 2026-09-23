@@ -697,6 +697,21 @@ func (m *Manager) GetOperatingMode(ctx context.Context) (qmi.OperatingMode, erro
 
 // SetOperatingMode 设置设备操作模式（飞行模式 / 在线 / 低功耗等）
 func (m *Manager) SetOperatingMode(ctx context.Context, mode qmi.OperatingMode) error {
+	if mode == qmi.ModeReset {
+		// 复位的应答可能随传输断开而丢失，不能通过重绑 DMS 重放命令。
+		// 调用方负责观察复位后的设备收敛；这里保留原始错误，不触发额外恢复。
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		dms, err := m.ensureDMSServiceContext(ctx)
+		if err != nil {
+			return err
+		}
+		return dms.SetOperatingMode(ctx, mode)
+	}
 	return m.withDMSRecovery("SetOperatingMode", func(dms *qmi.DMSService) error {
 		return dms.SetOperatingMode(ctx, mode)
 	})

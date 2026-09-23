@@ -201,7 +201,12 @@ func NewDMSServiceWithContext(ctx context.Context, client *Client) (*DMSService,
 
 // Close releases the DMS client ID / Close释放DMS客户端ID
 func (d *DMSService) Close() error {
-	return d.client.ReleaseClientID(ServiceDMS, d.clientID)
+	return d.CloseWithContext(context.Background())
+}
+
+// CloseWithContext 在调用方预算内释放 DMS client ID。
+func (d *DMSService) CloseWithContext(ctx context.Context) error {
+	return d.client.ReleaseClientIDWithContext(ctx, ServiceDMS, d.clientID)
 }
 
 func (d *DMSService) ClientID() uint8 {
